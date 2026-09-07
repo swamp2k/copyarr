@@ -1,0 +1,11 @@
+services:
+  copyarr:
+    build: .
+    container_name: copyarr
+    restart: unless-stopped
+    ports:
+      - "8686:8686"
+    volumes:
+      - /mnt/user/appdata/copyarr:/data
+      - /mnt/user/appdata/copyarr/config:/config
+      - /mnt/user/media/downloads:/downloads
