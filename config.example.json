@@ -1,0 +1,28 @@
+{
+  "data_dir": "/data",
+  "listen_addr": ":8686",
+  "rclone_config": "/config/rclone.conf",
+  "scan_interval_seconds": 300,
+  "rules": [
+    {
+      "id": "seedbox-to-unraid",
+      "name": "Seedbox → Unraid downloads",
+      "enabled": true,
+      "source": { "remote": "seedbox", "path": "/media/sdm1/USER/private/rtorrent/complete" },
+      "destination": { "remote": "", "path": "/downloads" },
+      "mode": "copy",
+      "initial_behavior": "ignore_existing",
+      "stability_seconds": 600,
+      "cleanup_days": 14,
+      "rtorrent": {
+        "url": "https://seedbox.example/RPC2",
+        "username": "",
+        "password": "",
+        "view": "main",
+        "source_base_path": "/media/sdm1/USER/private/rtorrent/complete",
+        "required": false
+      },
+      "rclone_args": ["--retries", "5", "--low-level-retries", "10"]
+    }
+  ]
+}
