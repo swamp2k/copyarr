@@ -1,0 +1,7 @@
+copyarr
+*.db
+*.db-shm
+*.db-wal
+config.json
+rclone.conf
+.env
