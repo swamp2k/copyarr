@@ -420,13 +420,12 @@ func (e *Engine) transferJob(ctx context.Context, r config.Rule, job db.Job, ite
 		}
 	}
 	if r.Mode == "move" {
-		if err := e.rc.DeleteFile(ctx, src); err != nil && !isDir {
-			return fmt.Errorf("destination committed but source delete failed: %w", err)
-		}
 		if isDir {
-			// rclone purge is intentionally not used in the MVP; directory move
-			// sources need an explicit safe implementation before enabling it.
-			return fmt.Errorf("move mode for directory jobs is not yet supported safely")
+			if err := e.rc.Purge(ctx, src); err != nil {
+				return fmt.Errorf("destination committed but source purge failed: %w", err)
+			}
+		} else if err := e.rc.DeleteFile(ctx, src); err != nil {
+			return fmt.Errorf("destination committed but source delete failed: %w", err)
 		}
 	}
 	e.updateActive(job.ID, job.TotalBytes, 0)
