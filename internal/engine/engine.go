@@ -36,22 +36,38 @@ type ActiveTransfer struct {
 	StartedAt        string  `json:"started_at"`
 }
 
+type RuleScanStatus struct {
+	RuleID              string  `json:"rule_id"`
+	LastScanStartedAt   *string `json:"last_scan_started_at,omitempty"`
+	LastScanCompletedAt *string `json:"last_scan_completed_at,omitempty"`
+	LastError           string  `json:"last_error,omitempty"`
+	SourceObjects       int     `json:"source_objects"`
+	RTorrentParsed      int     `json:"rtorrent_parsed"`
+	RTorrentComplete    int     `json:"rtorrent_complete"`
+}
+
 type Status struct {
-	Service  string          `json:"service"`
-	Scanning bool            `json:"scanning"`
-	Active   *ActiveTransfer `json:"active,omitempty"`
-	Queue    db.QueueStats   `json:"queue"`
-	Jobs     map[string]int  `json:"jobs"`
+	Service   string                   `json:"service"`
+	Version   string                   `json:"version"`
+	Revision  string                   `json:"revision"`
+	Scanning  bool                     `json:"scanning"`
+	Active    *ActiveTransfer          `json:"active,omitempty"`
+	Queue     db.QueueStats            `json:"queue"`
+	Jobs      map[string]int           `json:"jobs"`
+	RuleScans map[string]RuleScanStatus `json:"rule_scans"`
 }
 
 type Engine struct {
-	cfg      config.Config
-	db       *db.DB
-	rc       rc.Client
-	wake     chan struct{}
-	mu       sync.Mutex
-	scanning bool
-	active   *ActiveTransfer
+	cfg        config.Config
+	db         *db.DB
+	rc         rc.Client
+	version    string
+	revision   string
+	wake       chan struct{}
+	mu         sync.Mutex
+	scanning   bool
+	active     *ActiveTransfer
+	ruleScans  map[string]RuleScanStatus
 }
 
 type seenItem struct {
@@ -59,12 +75,21 @@ type seenItem struct {
 	obj  db.Object
 }
 
-func New(cfg config.Config, d *db.DB) *Engine {
+func New(cfg config.Config, d *db.DB, version, revision string) *Engine {
+	if version == "" {
+		version = "dev"
+	}
+	if revision == "" {
+		revision = "unknown"
+	}
 	return &Engine{
-		cfg:  cfg,
-		db:   d,
-		rc:   rc.Client{ConfigPath: cfg.RcloneConfig},
-		wake: make(chan struct{}, 1),
+		cfg:       cfg,
+		db:        d,
+		rc:        rc.Client{ConfigPath: cfg.RcloneConfig},
+		version:   version,
+		revision:  revision,
+		wake:      make(chan struct{}, 1),
+		ruleScans: make(map[string]RuleScanStatus),
 	}
 }
 
@@ -119,12 +144,19 @@ func (e *Engine) scanAll(ctx context.Context) {
 		if !r.Enabled {
 			continue
 		}
+		e.scanStarted(r.ID)
+		var scanErr error
 		if err := e.scanRule(ctx, r); err != nil {
+			scanErr = err
 			slog.Error("scan failed", "rule", r.ID, "err", err)
 		}
 		if err := e.cleanupRule(ctx, r); err != nil {
 			slog.Error("cleanup failed", "rule", r.ID, "err", err)
+			if scanErr == nil {
+				scanErr = fmt.Errorf("cleanup: %w", err)
+			}
 		}
+		e.scanFinished(r.ID, scanErr)
 	}
 }
 
@@ -133,6 +165,7 @@ func (e *Engine) scanRule(ctx context.Context, r config.Rule) error {
 	if err != nil {
 		return err
 	}
+	e.scanCounts(r.ID, len(items), 0, 0)
 	metaKey := "rule:" + r.ID + ":initialized"
 	_, initialized, err := e.db.Meta(metaKey)
 	if err != nil {
@@ -156,19 +189,8 @@ func (e *Engine) scanRule(ctx context.Context, r config.Rule) error {
 					completeCount++
 				}
 			}
+			e.scanCounts(r.ID, len(items), len(torrents), completeCount)
 			slog.Info("rtorrent scan", "rule", r.ID, "parsed", len(torrents), "complete", completeCount)
-			for _, t := range torrents {
-				if !t.Complete {
-					continue
-				}
-				slog.Info("rtorrent torrent",
-					"rule", r.ID,
-					"name", t.Name,
-					"base_path", t.BasePath,
-					"hash", t.Hash,
-					"complete", t.Complete,
-				)
-			}
 		}
 	}
 
@@ -637,8 +659,54 @@ func (e *Engine) Status() (Status, error) {
 		cp := *e.active
 		active = &cp
 	}
+	ruleScans := make(map[string]RuleScanStatus, len(e.ruleScans))
+	for k, v := range e.ruleScans {
+		ruleScans[k] = v
+	}
+	version := e.version
+	revision := e.revision
 	e.mu.Unlock()
-	return Status{Service: "copyarr", Scanning: scanning, Active: active, Queue: queue, Jobs: counts}, nil
+	return Status{
+		Service: "copyarr", Version: version, Revision: revision, Scanning: scanning,
+		Active: active, Queue: queue, Jobs: counts, RuleScans: ruleScans,
+	}, nil
+}
+
+func (e *Engine) scanStarted(ruleID string) {
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	s := e.ruleScans[ruleID]
+	s.RuleID = ruleID
+	s.LastScanStartedAt = &ts
+	s.LastError = ""
+	e.ruleScans[ruleID] = s
+}
+
+func (e *Engine) scanCounts(ruleID string, sourceObjects, rtParsed, rtComplete int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	s := e.ruleScans[ruleID]
+	s.RuleID = ruleID
+	s.SourceObjects = sourceObjects
+	s.RTorrentParsed = rtParsed
+	s.RTorrentComplete = rtComplete
+	e.ruleScans[ruleID] = s
+}
+
+func (e *Engine) scanFinished(ruleID string, err error) {
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	s := e.ruleScans[ruleID]
+	s.RuleID = ruleID
+	s.LastScanCompletedAt = &ts
+	if err != nil {
+		s.LastError = err.Error()
+	} else {
+		s.LastError = ""
+	}
+	e.ruleScans[ruleID] = s
 }
 
 func (e *Engine) cleanupRule(ctx context.Context, r config.Rule) error {
