@@ -77,6 +77,50 @@ func (c Client) CopyDir(ctx context.Context, src, dst string, extra []string) er
 	return err
 }
 
+func (c Client) CopyToWithMultiThreadFallback(ctx context.Context, src, dst string, extra []string, streams int, cutoff string) (bool, error) {
+	withMT := append([]string{}, extra...)
+	if streams > 1 {
+		withMT = append(withMT, "--multi-thread-streams", fmt.Sprint(streams))
+		if cutoff != "" {
+			withMT = append(withMT, "--multi-thread-cutoff", cutoff)
+		}
+	}
+	err := c.CopyTo(ctx, src, dst, withMT)
+	if err == nil || streams <= 1 {
+		return streams > 1, err
+	}
+	if !isMultiThreadUnsupported(err) {
+		return true, err
+	}
+	return false, c.CopyTo(ctx, src, dst, extra)
+}
+
+func (c Client) CopyDirWithMultiThreadFallback(ctx context.Context, src, dst string, extra []string, streams int, cutoff string) (bool, error) {
+	withMT := append([]string{}, extra...)
+	if streams > 1 {
+		withMT = append(withMT, "--multi-thread-streams", fmt.Sprint(streams))
+		if cutoff != "" {
+			withMT = append(withMT, "--multi-thread-cutoff", cutoff)
+		}
+	}
+	err := c.CopyDir(ctx, src, dst, withMT)
+	if err == nil || streams <= 1 {
+		return streams > 1, err
+	}
+	if !isMultiThreadUnsupported(err) {
+		return true, err
+	}
+	return false, c.CopyDir(ctx, src, dst, extra)
+}
+
+func isMultiThreadUnsupported(err error) bool {
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "multi-thread") ||
+		strings.Contains(s, "multithread") ||
+		strings.Contains(s, "multi thread") ||
+		strings.Contains(s, "not supported")
+}
+
 func (c Client) ListTargetFiles(ctx context.Context, target string) ([]Item, error) {
 	out, err := c.run(ctx, "lsjson", target, "--recursive", "--files-only")
 	if err != nil {
