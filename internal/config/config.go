@@ -30,17 +30,20 @@ type RTorrent struct {
 }
 
 type Rule struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	Enabled          bool      `json:"enabled"`
-	Source           Endpoint  `json:"source"`
-	Destination      Endpoint  `json:"destination"`
-	Mode             string    `json:"mode"`
-	InitialBehavior  string    `json:"initial_behavior"`
-	StabilitySeconds int       `json:"stability_seconds"`
-	CleanupDays      int       `json:"cleanup_days"`
-	RTorrent         *RTorrent `json:"rtorrent,omitempty"`
-	RcloneArgs       []string  `json:"rclone_args,omitempty"`
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	Enabled            bool      `json:"enabled"`
+	Source             Endpoint  `json:"source"`
+	Destination        Endpoint  `json:"destination"`
+	Mode               string    `json:"mode"`
+	InitialBehavior    string    `json:"initial_behavior"`
+	StabilitySeconds   int       `json:"stability_seconds"`
+	CleanupDays        int       `json:"cleanup_days"`
+	Verification       string    `json:"verification"`
+	MultiThreadStreams int       `json:"multi_thread_streams"`
+	MultiThreadCutoff  string    `json:"multi_thread_cutoff"`
+	RTorrent           *RTorrent `json:"rtorrent,omitempty"`
+	RcloneArgs         []string  `json:"rclone_args,omitempty"`
 }
 
 func Load(path string) (Config, error) {
@@ -74,6 +77,21 @@ func Load(path string) (Config, error) {
 		}
 		if r.StabilitySeconds <= 0 {
 			r.StabilitySeconds = 600
+		}
+		if r.Verification == "" {
+			r.Verification = "size"
+		}
+		if r.Verification != "none" && r.Verification != "size" {
+			return c, fmt.Errorf("rule %s has unsupported verification %q (use none or size)", r.ID, r.Verification)
+		}
+		if r.MultiThreadStreams < 0 {
+			return c, fmt.Errorf("rule %s has invalid multi_thread_streams", r.ID)
+		}
+		if r.MultiThreadStreams == 0 {
+			r.MultiThreadStreams = 4
+		}
+		if r.MultiThreadCutoff == "" {
+			r.MultiThreadCutoff = "256M"
 		}
 		if r.RTorrent != nil && r.RTorrent.View == "" {
 			r.RTorrent.View = "main"
