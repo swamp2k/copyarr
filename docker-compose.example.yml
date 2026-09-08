@@ -1,6 +1,6 @@
 services:
   copyarr:
-    build: .
+    image: ghcr.io/swamp2k/copyarr:latest
     container_name: copyarr
     restart: unless-stopped
     ports:
