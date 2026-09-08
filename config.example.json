@@ -14,6 +14,9 @@
       "initial_behavior": "ignore_existing",
       "stability_seconds": 600,
       "cleanup_days": 14,
+      "verification": "size",
+      "multi_thread_streams": 4,
+      "multi_thread_cutoff": "256M",
       "rtorrent": {
         "url": "https://seedbox.example/RPC2",
         "username": "",
