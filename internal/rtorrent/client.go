@@ -51,7 +51,7 @@ func esc(s string) string {
 	return b.String()
 }
 
-func (c *Client) Completed(ctx context.Context) ([]Torrent, error) {
+func (c *Client) Torrents(ctx context.Context) ([]Torrent, error) {
 	view := c.cfg.View
 	if view == "" {
 		view = "main"
@@ -95,9 +95,7 @@ func (c *Client) Completed(ctx context.Context) ([]Torrent, error) {
 		}
 		row := rowv.Array.Values
 		t := Torrent{Hash: str(row[0]), Name: str(row[1]), Complete: num(row[2]) != 0, BasePath: str(row[3])}
-		if t.Complete {
-			out = append(out, t)
-		}
+		out = append(out, t)
 	}
 	return out, nil
 }
@@ -117,4 +115,19 @@ func num(v xValue) int64 {
 		return *v.I4
 	}
 	return 0
+}
+
+
+func (c *Client) Completed(ctx context.Context) ([]Torrent, error) {
+	all, err := c.Torrents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Torrent, 0, len(all))
+	for _, t := range all {
+		if t.Complete {
+			out = append(out, t)
+		}
+	}
+	return out, nil
 }
