@@ -115,6 +115,11 @@ func (c Client) DeleteFile(ctx context.Context, target string) error {
 	return err
 }
 
+func (c Client) Purge(ctx context.Context, target string) error {
+	_, err := c.run(ctx, "purge", target)
+	return err
+}
+
 func (c Client) Stat(ctx context.Context, target string) (Item, error) {
 	out, err := c.run(ctx, "lsjson", target, "--stat")
 	if err != nil {
