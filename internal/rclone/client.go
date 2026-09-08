@@ -70,6 +70,41 @@ func (c Client) CopyTo(ctx context.Context, src, dst string, extra []string) err
 	return err
 }
 
+func (c Client) CopyDir(ctx context.Context, src, dst string, extra []string) error {
+	args := []string{"copy", src, dst, "--partial-suffix", ".copyarr-part"}
+	args = append(args, extra...)
+	_, err := c.run(ctx, args...)
+	return err
+}
+
+func (c Client) ListTargetFiles(ctx context.Context, target string) ([]Item, error) {
+	out, err := c.run(ctx, "lsjson", target, "--recursive", "--files-only")
+	if err != nil {
+		return nil, err
+	}
+	var items []Item
+	if err := json.Unmarshal(out, &items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (c Client) TargetBytes(ctx context.Context, target string) (int64, error) {
+	items, err := c.ListTargetFiles(ctx, target)
+	if err == nil {
+		var total int64
+		for _, item := range items {
+			total += item.Size
+		}
+		return total, nil
+	}
+	st, statErr := c.Stat(ctx, target)
+	if statErr != nil {
+		return 0, err
+	}
+	return st.Size, nil
+}
+
 func (c Client) MoveTo(ctx context.Context, src, dst string) error {
 	_, err := c.run(ctx, "moveto", src, dst)
 	return err
