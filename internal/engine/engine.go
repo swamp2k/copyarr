@@ -410,8 +410,6 @@ func (e *Engine) worker(ctx context.Context) {
 		if err := e.transferJob(ctx, r, job, items); err != nil {
 			slog.Error("transfer failed", "job", job.ID, "name", job.DisplayName, "err", err)
 			_ = e.db.FailJob(job.ID, err.Error())
-			time.Sleep(5 * time.Second)
-			_ = e.db.RequeueJob(job.ID)
 		}
 	}
 }
