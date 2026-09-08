@@ -140,8 +140,10 @@ func (e *Engine) scanRule(ctx context.Context, r config.Rule) error {
 		}
 
 		ready := false
-		if rtOK {
-			ready = matchesCompleted(it.Path, *r.RTorrent, completed)
+		reason := ""
+		if rtOK && matchesCompleted(it.Path, *r.RTorrent, completed) {
+			ready = true
+			reason = "rtorrent_complete"
 		} else {
 			stableSince := now
 			if !isNew {
@@ -150,6 +152,9 @@ func (e *Engine) scanRule(ctx context.Context, r config.Rule) error {
 			t, parseErr := time.Parse(time.RFC3339Nano, stableSince)
 			if parseErr == nil {
 				ready = time.Since(t) >= time.Duration(r.StabilitySeconds)*time.Second
+				if ready {
+					reason = "stable"
+				}
 			}
 		}
 		if ready {
@@ -163,6 +168,7 @@ func (e *Engine) scanRule(ctx context.Context, r config.Rule) error {
 			if err := e.db.Queue(id); err != nil {
 				return err
 			}
+			slog.Info("queued object", "rule", r.ID, "path", it.Path, "reason", reason, "size", it.Size)
 		}
 	}
 
