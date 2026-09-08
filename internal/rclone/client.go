@@ -63,7 +63,7 @@ func (c Client) run(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 
-func (c Client) runCopy(ctx context.Context, args []string, progress ProgressFunc) error {
+func (c Client) runCopyJSONStats(ctx context.Context, args []string, progress ProgressFunc) error {
 	base := []string{}
 	if c.ConfigPath != "" {
 		base = append(base, "--config", c.ConfigPath)
@@ -126,6 +126,32 @@ func (c Client) runCopy(ctx context.Context, args []string, progress ProgressFun
 		msg := strings.Join(nonStats, "\n")
 		mu.Unlock()
 		return fmt.Errorf("rclone %v: %w: %s", args, err, strings.TrimSpace(msg))
+	}
+	return nil
+}
+
+func (c Client) runCopy(ctx context.Context, args []string, progress ProgressFunc) error {
+	err := c.runCopyJSONStats(ctx, args, progress)
+	if err == nil {
+		return nil
+	}
+	s := strings.ToLower(err.Error())
+	if !strings.Contains(s, "unknown flag: --stats-one-line-json") {
+		return err
+	}
+
+	// Older distro-packaged rclone versions may support multi-thread transfers
+	// but not JSON one-line stats. Progress telemetry is optional; the transfer
+	// itself must still work.
+	base := []string{}
+	if c.ConfigPath != "" {
+		base = append(base, "--config", c.ConfigPath)
+	}
+	cmd := exec.CommandContext(ctx, "rclone", append(base, args...)...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("rclone %v: %w: %s", args, err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
 }
