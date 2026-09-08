@@ -9,15 +9,16 @@ Copyarr is a small persistent transfer queue for automated copy/move jobs. It is
 - `ignore_existing` bootstrap so a new rule can start from "only things that appear from now on".
 - Stability-based readiness fallback.
 - Optional rTorrent XML-RPC readiness: only paths belonging to completed torrents are queued.
-- Single persistent worker queue. Restarting the container does not erase state.
-- Copy to a staging name, verify exact byte size, then commit to the final destination.
+- Persistent grouped job queue. Restarting the container does not erase state.
+- One completed rTorrent payload becomes one Copyarr job, with all files verified as a manifest.
+- Copy into a hidden `.copyarr-staging/<job-id>/...` area, verify exact byte sizes, then commit to the final destination.
 - `move` means copy + verify + commit before deleting the source.
 - Managed 14-day cleanup only touches destinations Copyarr itself committed and whose size still matches.
 - Small HTTP API for health/state/scan triggers.
 
 ## Current status
 
-This is the first functional draft. Rules are JSON-configured and the queue is intentionally single-worker. Dynamic rule editing, Nexus registration, checksums, directory-level atomic torrent commits and richer retry policy belong in later iterations.
+The transfer engine now uses persistent jobs rather than a file-only queue. Rules are still JSON-configured and the worker is intentionally single-transfer for predictable seedbox behaviour. Dynamic rule editing, Nexus registration, checksums and richer retry policy remain later iterations.
 
 ## Quick start
 
@@ -41,7 +42,9 @@ When enabled, Copyarr calls `d.multicall2` for hash, name, completion state and 
 ## API
 
 - `GET /health`
+- `GET /api/status` — active transfer, queue depth/bytes, job counts, progress, speed and ETA.
 - `GET /api/rules`
+- `GET /api/jobs?limit=100`
 - `GET /api/objects?limit=200`
 - `POST /api/scan`
 
@@ -49,11 +52,15 @@ Default listen address: `:8686`.
 
 ## State model
 
-Typical states:
+Objects typically move through:
 
 `discovered -> queued -> copying -> done`
 
-with `retry_wait` on transfer failure, `ignored` for initial bootstrap objects, and `cleaned` after managed retention cleanup.
+Jobs independently move through:
+
+`queued -> copying -> done`
+
+with `retry_wait` on transfer failure, `ignored` for initial bootstrap objects, `superseded` for an older generation of a still-growing upload, and `cleaned` after managed retention cleanup.
 
 Object identity includes relative path, exact size and modification time. A destination can therefore be moved away by Sonarr/Tdarr without Copyarr "forgetting" that the source generation was already handled.
 
