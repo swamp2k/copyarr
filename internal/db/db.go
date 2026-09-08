@@ -423,7 +423,7 @@ FROM jobs ORDER BY id DESC LIMIT ?`, limit)
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Job
+	out := make([]Job, 0)
 	for rows.Next() {
 		var j Job
 		if err := rows.Scan(&j.ID, &j.RuleID, &j.JobKey, &j.Kind, &j.DisplayName, &j.RelRoot, &j.State, &j.Reason,
@@ -445,7 +445,7 @@ FROM objects ORDER BY id DESC LIMIT ?`, limit)
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Object
+	out := make([]Object, 0)
 	for rows.Next() {
 		var o Object
 		if err := rows.Scan(&o.ID, &o.RuleID, &o.ObjectKey, &o.RelPath, &o.Size, &o.ModTime, &o.State,
