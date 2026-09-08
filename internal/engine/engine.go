@@ -502,7 +502,12 @@ func (e *Engine) monitorProgress(ctx context.Context, target string, total int64
 			case <-ticker.C:
 				bytes, err := e.rc.TargetBytes(ctx, target)
 				if err != nil {
-					continue
+					// copyto may keep a single large file at the configured
+					// partial suffix until the final rename.
+					bytes, err = e.rc.TargetBytes(ctx, target+".copyarr-part")
+					if err != nil {
+						continue
+					}
 				}
 				now := time.Now()
 				elapsed := now.Sub(prevAt).Seconds()
