@@ -380,10 +380,57 @@ func (d *DB) RequeueJob(id int64) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(`UPDATE jobs SET state='queued',updated_at=? WHERE id=? AND state='retry_wait'`, ts, id); err != nil {
+	res, err := tx.Exec(`UPDATE jobs SET state='queued',updated_at=?,last_error='' WHERE id=? AND state IN ('retry_wait','paused')`, ts, id)
+	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(`UPDATE objects SET state='queued' WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?) AND state='retry_wait'`, id); err != nil {
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("job %d is not retryable/resumable", id)
+	}
+	if _, err = tx.Exec(`UPDATE objects SET state='queued',last_error='' WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?) AND state IN ('retry_wait','paused')`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (d *DB) PauseJob(id int64) error {
+	ts := now()
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE jobs SET state='paused',updated_at=? WHERE id=? AND state IN ('queued','retry_wait')`, ts, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("job %d cannot be paused in its current state", id)
+	}
+	if _, err = tx.Exec(`UPDATE objects SET state='paused' WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?) AND state IN ('queued','retry_wait')`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (d *DB) CancelJob(id int64) error {
+	ts := now()
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE jobs SET state='cancelled',updated_at=? WHERE id=? AND state IN ('queued','retry_wait','paused')`, ts, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("job %d cannot be cancelled in its current state", id)
+	}
+	if _, err = tx.Exec(`UPDATE objects SET state='cancelled' WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?) AND state IN ('queued','retry_wait','paused')`, id); err != nil {
 		return err
 	}
 	return tx.Commit()
