@@ -180,6 +180,27 @@ FROM objects WHERE rule_id=? AND object_key=?`, rule, key).Scan(
 		&o.FirstSeen, &o.LastSeen, &o.StableSince, &o.Attempts, &o.LastError, &o.CompletedAt, &o.DestPath,
 	)
 	if err == sql.ErrNoRows {
+		// FTP/SFTP modification timestamps are not stable enough to be part of
+		// transfer identity by themselves. If the same path and exact size was
+		// already seen, reuse that generation even if the remote mtime changed.
+		// A genuinely growing upload changes size and therefore still creates a
+		// new generation. Content replacement with identical path+size requires
+		// checksum support, which is intentionally deferred.
+		sameErr := d.QueryRow(`SELECT id,rule_id,object_key,rel_path,size,mod_time,state,first_seen,last_seen,stable_since,attempts,last_error,completed_at,dest_path
+FROM objects
+WHERE rule_id=? AND rel_path=? AND size=? AND state<>'superseded'
+ORDER BY id DESC LIMIT 1`, rule, rel, size).Scan(
+			&o.ID, &o.RuleID, &o.ObjectKey, &o.RelPath, &o.Size, &o.ModTime, &o.State,
+			&o.FirstSeen, &o.LastSeen, &o.StableSince, &o.Attempts, &o.LastError, &o.CompletedAt, &o.DestPath,
+		)
+		if sameErr == nil {
+			_, updateErr := d.Exec(`UPDATE objects SET last_seen=? WHERE id=?`, timeNow, o.ID)
+			o.LastSeen = timeNow
+			return o, false, updateErr
+		}
+		if sameErr != sql.ErrNoRows {
+			return o, false, sameErr
+		}
 		tx, e := d.Begin()
 		if e != nil {
 			return o, false, e
