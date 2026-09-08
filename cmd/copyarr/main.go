@@ -44,7 +44,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	eng := engine.New(cfg, database)
+	eng := engine.New(cfg, database, version, revision)
 	eng.Run(ctx)
 
 	srv := &http.Server{Addr: cfg.ListenAddr, Handler: api.New(eng).Handler()}
