@@ -25,7 +25,9 @@ The transfer engine now uses persistent jobs rather than a file-only queue. Rule
 1. Create an rclone config containing your source remote(s). For FTP this can be done with `rclone config`.
 2. Copy `config.example.json` to `/mnt/user/appdata/copyarr/config/config.json` and edit it.
 3. Do **not** reuse credentials that have been pasted into chat/logs; rotate them first.
-4. Build/run with the example compose file or convert it to an Unraid template.
+4. Run `ghcr.io/swamp2k/copyarr:latest` with the example compose file or an Unraid template.
+
+Copyarr publishes a fresh `:latest` image from `main` after CI succeeds. Git tags such as `v0.2.0` also publish matching version tags. Unraid can therefore detect updates by comparing the registry digest instead of relying on locally-built `copyarr:local` images.
 
 The example mounts:
 
