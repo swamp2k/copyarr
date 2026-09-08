@@ -427,27 +427,36 @@ func (e *Engine) transferJob(ctx context.Context, r config.Rule, job db.Job, ite
 	isDir := job.Kind == "torrent" && (len(items) > 1 || items[0].RelPath != job.RelRoot)
 	src := rc.Target(r.Source, job.RelRoot)
 	final := rc.Target(r.Destination, job.RelRoot)
-	stageRel := path.Join(".copyarr-staging", strconv.FormatInt(job.ID, 10), job.RelRoot)
+	stageRootRel := path.Join(".copyarr-staging", strconv.FormatInt(job.ID, 10))
+	stageRel := path.Join(stageRootRel, job.RelRoot)
+	stageRoot := rc.Target(r.Destination, stageRootRel)
 	stage := rc.Target(r.Destination, stageRel)
 
+	if job.Attempts > 0 {
+		slog.Info("cleaning stale staging before retry", "job", job.ID, "stage_root", stageRoot, "attempts", job.Attempts)
+		if err := e.rc.PurgeIfExists(ctx, stageRoot); err != nil {
+			return fmt.Errorf("clean stale staging: %w", err)
+		}
+	}
+
 	e.beginActive(job, r)
-	stopProgress := e.monitorProgress(ctx, stage, job.TotalBytes)
-	defer func() {
-		stopProgress()
-		e.clearActive(job.ID)
-	}()
+	defer e.clearActive(job.ID)
 
 	slog.Info("copying job", "job", job.ID, "kind", job.Kind, "name", job.DisplayName, "source", src, "stage", stage, "items", len(items), "bytes", job.TotalBytes, "verification", r.Verification, "multi_thread_streams", r.MultiThreadStreams)
 	var usedMT bool
 	if isDir {
 		var err error
-		usedMT, err = e.rc.CopyDirWithMultiThreadFallback(ctx, src, stage, r.RcloneArgs, r.MultiThreadStreams, r.MultiThreadCutoff)
+		usedMT, err = e.rc.CopyDirWithMultiThreadFallback(ctx, src, stage, r.RcloneArgs, r.MultiThreadStreams, r.MultiThreadCutoff, func(p rc.Progress) {
+			e.updateRcloneProgress(job.ID, p)
+		})
 		if err != nil {
 			return err
 		}
 	} else {
 		var err error
-		usedMT, err = e.rc.CopyToWithMultiThreadFallback(ctx, src, stage, r.RcloneArgs, r.MultiThreadStreams, r.MultiThreadCutoff)
+		usedMT, err = e.rc.CopyToWithMultiThreadFallback(ctx, src, stage, r.RcloneArgs, r.MultiThreadStreams, r.MultiThreadCutoff, func(p rc.Progress) {
+			e.updateRcloneProgress(job.ID, p)
+		})
 		if err != nil {
 			return err
 		}
@@ -563,64 +572,28 @@ func (e *Engine) setTransferMode(jobID int64, multiThread bool) {
 	}
 }
 
-func (e *Engine) monitorProgress(ctx context.Context, target string, total int64) func() {
-	stop := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		var prevBytes int64
-		prevAt := time.Now()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-stop:
-				return
-			case <-ticker.C:
-				bytes, err := e.rc.TargetBytes(ctx, target)
-				if err != nil {
-					// copyto may keep a single large file at the configured
-					// partial suffix until the final rename.
-					bytes, err = e.rc.TargetBytes(ctx, target+".copyarr-part")
-					if err != nil {
-						continue
-					}
-				}
-				now := time.Now()
-				elapsed := now.Sub(prevAt).Seconds()
-				speed := float64(0)
-				if elapsed > 0 && bytes >= prevBytes {
-					speed = float64(bytes-prevBytes) / elapsed
-				}
-				e.mu.Lock()
-				if e.active != nil {
-					e.active.TransferredBytes = bytes
-					if total > 0 {
-						e.active.ProgressPercent = float64(bytes) * 100 / float64(total)
-						if e.active.ProgressPercent > 100 {
-							e.active.ProgressPercent = 100
-						}
-					}
-					e.active.SpeedBps = speed
-					e.active.ETASeconds = nil
-					if speed > 0 && bytes < total {
-						eta := int64(float64(total-bytes) / speed)
-						e.active.ETASeconds = &eta
-					}
-				}
-				e.mu.Unlock()
-				prevBytes = bytes
-				prevAt = now
-			}
-		}
-	}()
-	return func() {
-		select {
-		case <-stop:
-		default:
-			close(stop)
+func (e *Engine) updateRcloneProgress(jobID int64, p rc.Progress) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.active == nil || e.active.JobID != jobID {
+		return
+	}
+	bytes := p.Bytes
+	if bytes < 0 {
+		bytes = 0
+	}
+	if e.active.TotalBytes > 0 && bytes > e.active.TotalBytes {
+		bytes = e.active.TotalBytes
+	}
+	e.active.TransferredBytes = bytes
+	if e.active.TotalBytes > 0 {
+		e.active.ProgressPercent = float64(bytes) * 100 / float64(e.active.TotalBytes)
+		if e.active.ProgressPercent > 100 {
+			e.active.ProgressPercent = 100
 		}
 	}
+	e.active.SpeedBps = p.Speed
+	e.active.ETASeconds = p.ETASeconds
 }
 
 func (e *Engine) updateActive(jobID, bytes int64, speed float64) {
