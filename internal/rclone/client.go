@@ -9,7 +9,6 @@ import (
 		"os/exec"
 	"path"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/swamp2k/copyarr/internal/config"
@@ -68,7 +67,11 @@ func (c Client) runCopyJSONStats(ctx context.Context, args []string, progress Pr
 	if c.ConfigPath != "" {
 		base = append(base, "--config", c.ConfigPath)
 	}
-	args = append(args, "--stats", "2s", "--stats-one-line-json")
+
+	// rclone emits periodic transfer stats as NDJSON records when JSON logging
+	// is enabled. Stats are INFO by default, so explicitly promote them to
+	// NOTICE to make sure they are emitted without enabling verbose logging.
+	args = append(args, "--stats", "2s", "--stats-log-level", "NOTICE", "--use-json-log")
 	cmd := exec.CommandContext(ctx, "rclone", append(base, args...)...)
 
 	stderr, err := cmd.StderrPipe()
@@ -82,50 +85,45 @@ func (c Client) runCopyJSONStats(ctx context.Context, args []string, progress Pr
 		return err
 	}
 
-	var mu sync.Mutex
 	var nonStats []string
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		scanner := bufio.NewScanner(stderr)
-		buf := make([]byte, 64*1024)
-		scanner.Buffer(buf, 1024*1024)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			var raw map[string]any
-			if json.Unmarshal([]byte(line), &raw) == nil {
-				p := Progress{}
-				if v, ok := raw["bytes"].(float64); ok {
-					p.Bytes = int64(v)
-				}
-				if v, ok := raw["totalBytes"].(float64); ok {
-					p.TotalBytes = int64(v)
-				}
-				if v, ok := raw["speed"].(float64); ok {
-					p.Speed = v
-				}
-				if v, ok := raw["eta"].(float64); ok && v >= 0 {
-					eta := int64(v)
-					p.ETASeconds = &eta
-				}
-				if progress != nil && (p.Bytes > 0 || p.TotalBytes > 0 || p.Speed > 0) {
-					progress(p)
-					continue
-				}
-			}
-			mu.Lock()
-			nonStats = append(nonStats, line)
-			mu.Unlock()
+	scanner := bufio.NewScanner(stderr)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		var raw struct {
+			Stats *struct {
+				Bytes      int64    `json:"bytes"`
+				TotalBytes int64    `json:"totalBytes"`
+				Speed      float64  `json:"speed"`
+				ETA        *float64 `json:"eta"`
+			} `json:"stats"`
 		}
-	}()
+		if json.Unmarshal([]byte(line), &raw) == nil && raw.Stats != nil {
+			p := Progress{
+				Bytes:      raw.Stats.Bytes,
+				TotalBytes: raw.Stats.TotalBytes,
+				Speed:      raw.Stats.Speed,
+			}
+			if raw.Stats.ETA != nil && *raw.Stats.ETA >= 0 {
+				eta := int64(*raw.Stats.ETA)
+				p.ETASeconds = &eta
+			}
+			if progress != nil {
+				progress(p)
+			}
+			continue
+		}
+		nonStats = append(nonStats, line)
+	}
 
 	err = cmd.Wait()
-	<-done
+	if scanErr := scanner.Err(); scanErr != nil && err == nil {
+		return scanErr
+	}
 	if err != nil {
-		mu.Lock()
-		msg := strings.Join(nonStats, "\n")
-		mu.Unlock()
-		return fmt.Errorf("rclone %v: %w: %s", args, err, strings.TrimSpace(msg))
+		return fmt.Errorf("rclone %v: %w: %s", args, err, strings.TrimSpace(strings.Join(nonStats, "\n")))
 	}
 	return nil
 }
@@ -136,13 +134,11 @@ func (c Client) runCopy(ctx context.Context, args []string, progress ProgressFun
 		return nil
 	}
 	s := strings.ToLower(err.Error())
-	if !strings.Contains(s, "unknown flag: --stats-one-line-json") {
+	if !strings.Contains(s, "unknown flag: --use-json-log") {
 		return err
 	}
 
-	// Older distro-packaged rclone versions may support multi-thread transfers
-	// but not JSON one-line stats. Progress telemetry is optional; the transfer
-	// itself must still work.
+	// Telemetry must never prevent a transfer from running on an older rclone.
 	base := []string{}
 	if c.ConfigPath != "" {
 		base = append(base, "--config", c.ConfigPath)
