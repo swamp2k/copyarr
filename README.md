@@ -29,10 +29,12 @@ The transfer engine now uses persistent jobs rather than a file-only queue. Rule
 
 Copyarr publishes a fresh `:latest` image from `main` after CI succeeds. Git tags such as `v0.2.0` also publish matching version tags. Unraid can therefore detect updates by comparing the registry digest instead of relying on locally-built `copyarr:local` images.
 
+The repository includes an Unraid Docker template at `unraid/copyarr.xml`. It uses `ghcr.io/swamp2k/copyarr:latest`, so Unraid can detect updates by image digest.
+
 The example mounts:
 
-- `/mnt/user/appdata/copyarr` → `/data`
-- `/mnt/user/appdata/copyarr/config` → `/config`
+- `/mnt/user/appdata/copyarr-data/data` → `/data`
+- `/mnt/user/appdata/copyarr-data/config` → `/config`
 - `/mnt/user/media/downloads` → `/downloads`
 
 ## rTorrent
