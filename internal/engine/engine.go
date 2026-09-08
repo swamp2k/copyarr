@@ -25,6 +25,9 @@ type ActiveTransfer struct {
 	Name             string  `json:"name"`
 	Kind             string  `json:"kind"`
 	Path             string  `json:"path"`
+	Phase            string  `json:"phase"`
+	Verification     string  `json:"verification"`
+	MultiThread      bool    `json:"multi_thread"`
 	TotalBytes       int64   `json:"total_bytes"`
 	TransferredBytes int64   `json:"transferred_bytes"`
 	ProgressPercent  float64 `json:"progress_percent"`
@@ -405,32 +408,48 @@ func (e *Engine) transferJob(ctx context.Context, r config.Rule, job db.Job, ite
 	stageRel := path.Join(".copyarr-staging", strconv.FormatInt(job.ID, 10), job.RelRoot)
 	stage := rc.Target(r.Destination, stageRel)
 
-	e.beginActive(job)
+	e.beginActive(job, r)
 	stopProgress := e.monitorProgress(ctx, stage, job.TotalBytes)
 	defer func() {
 		stopProgress()
 		e.clearActive(job.ID)
 	}()
 
-	slog.Info("copying job", "job", job.ID, "kind", job.Kind, "name", job.DisplayName, "source", src, "stage", stage, "items", len(items), "bytes", job.TotalBytes)
+	slog.Info("copying job", "job", job.ID, "kind", job.Kind, "name", job.DisplayName, "source", src, "stage", stage, "items", len(items), "bytes", job.TotalBytes, "verification", r.Verification, "multi_thread_streams", r.MultiThreadStreams)
+	var usedMT bool
 	if isDir {
-		if err := e.rc.CopyDir(ctx, src, stage, r.RcloneArgs); err != nil {
+		var err error
+		usedMT, err = e.rc.CopyDirWithMultiThreadFallback(ctx, src, stage, r.RcloneArgs, r.MultiThreadStreams, r.MultiThreadCutoff)
+		if err != nil {
 			return err
 		}
 	} else {
-		if err := e.rc.CopyTo(ctx, src, stage, r.RcloneArgs); err != nil {
+		var err error
+		usedMT, err = e.rc.CopyToWithMultiThreadFallback(ctx, src, stage, r.RcloneArgs, r.MultiThreadStreams, r.MultiThreadCutoff)
+		if err != nil {
 			return err
 		}
 	}
+	e.setTransferMode(job.ID, usedMT)
+	e.setPhase(job.ID, "finalizing")
 
-	if err := e.verifyManifest(ctx, stage, job.RelRoot, items, isDir); err != nil {
-		return fmt.Errorf("verify staging: %w", err)
+	if r.Verification == "size" {
+		e.setPhase(job.ID, "verifying_staging")
+		if err := e.verifyManifest(ctx, stage, job.RelRoot, items, isDir); err != nil {
+			return fmt.Errorf("verify staging: %w", err)
+		}
 	}
+
+	e.setPhase(job.ID, "committing")
 	if err := e.rc.MoveTo(ctx, stage, final); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
-	if err := e.verifyManifest(ctx, final, job.RelRoot, items, isDir); err != nil {
-		return fmt.Errorf("verify committed: %w", err)
+
+	if r.Verification == "size" {
+		e.setPhase(job.ID, "verifying_final")
+		if err := e.verifyManifest(ctx, final, job.RelRoot, items, isDir); err != nil {
+			return fmt.Errorf("verify committed: %w", err)
+		}
 	}
 
 	for _, item := range items {
@@ -495,13 +514,30 @@ func (e *Engine) verifyManifest(ctx context.Context, target, relRoot string, exp
 	return nil
 }
 
-func (e *Engine) beginActive(job db.Job) {
+func (e *Engine) beginActive(job db.Job, r config.Rule) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.active = &ActiveTransfer{
 		JobID: job.ID, RuleID: job.RuleID, Name: job.DisplayName, Kind: job.Kind,
-		Path: job.RelRoot, TotalBytes: job.TotalBytes, StartedAt: now,
+		Path: job.RelRoot, Phase: "transferring", Verification: r.Verification,
+		MultiThread: r.MultiThreadStreams > 1, TotalBytes: job.TotalBytes, StartedAt: now,
+	}
+}
+
+func (e *Engine) setPhase(jobID int64, phase string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.active != nil && e.active.JobID == jobID {
+		e.active.Phase = phase
+	}
+}
+
+func (e *Engine) setTransferMode(jobID int64, multiThread bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.active != nil && e.active.JobID == jobID {
+		e.active.MultiThread = multiThread
 	}
 }
 
