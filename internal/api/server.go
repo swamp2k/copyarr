@@ -19,8 +19,25 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		write(w, map[string]any{"ok": true, "service": "copyarr"})
 	})
+	mux.HandleFunc("GET /api/status", func(w http.ResponseWriter, r *http.Request) {
+		status, err := s.eng.Status()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		write(w, status)
+	})
 	mux.HandleFunc("GET /api/rules", func(w http.ResponseWriter, r *http.Request) {
 		write(w, s.eng.Rules())
+	})
+	mux.HandleFunc("GET /api/jobs", func(w http.ResponseWriter, r *http.Request) {
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		items, err := s.eng.DB().ListJobs(limit)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		write(w, items)
 	})
 	mux.HandleFunc("GET /api/objects", func(w http.ResponseWriter, r *http.Request) {
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
