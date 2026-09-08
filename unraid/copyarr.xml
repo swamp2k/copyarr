@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Copyarr</Name>
+  <Repository>ghcr.io/swamp2k/copyarr:latest</Repository>
+  <Registry>https://ghcr.io/swamp2k/copyarr</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/swamp2k/copyarr/issues</Support>
+  <Project>https://github.com/swamp2k/copyarr</Project>
+  <Overview>Persistent copy/move queue for rclone-backed transfers, with rTorrent awareness, staging, optional verification and HTTP status API.</Overview>
+  <Category>Tools: Backup:</Category>
+  <WebUI>http://[IP]:[PORT:8686]/api/status</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/swamp2k/copyarr/main/unraid/copyarr.xml</TemplateURL>
+  <Icon/>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="Web UI Port" Target="8686" Default="8686" Mode="tcp" Description="Copyarr HTTP API/status port." Type="Port" Display="always" Required="true" Mask="false">8686</Config>
+  <Config Name="Config" Target="/config" Default="/mnt/user/appdata/copyarr-data/config" Mode="ro" Description="Contains config.json and rclone.conf." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/copyarr-data/config</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/copyarr-data/data" Mode="rw" Description="Persistent SQLite database and Copyarr state." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/copyarr-data/data</Config>
+  <Config Name="Downloads" Target="/downloads" Default="/mnt/user/media/downloads" Mode="rw" Description="Local staging and destination root used by the example seedbox rule." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/media/downloads</Config>
+</Container>
