@@ -147,6 +147,13 @@ func (e *Engine) scanRule(ctx context.Context, r config.Rule) error {
 			slog.Warn("rtorrent unavailable, using stability fallback", "rule", r.ID, "err", err)
 		} else {
 			rtOK = true
+			completeCount := 0
+			for _, t := range torrents {
+				if t.Complete {
+					completeCount++
+				}
+			}
+			slog.Info("rtorrent scan", "rule", r.ID, "parsed", len(torrents), "complete", completeCount)
 			for _, t := range torrents {
 				if !t.Complete {
 					continue
