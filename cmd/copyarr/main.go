@@ -16,6 +16,11 @@ import (
 	"github.com/swamp2k/copyarr/internal/engine"
 )
 
+var (
+	version  = "dev"
+	revision = "unknown"
+)
+
 func main() {
 	cfgPath := flag.String("config", "/config/config.json", "config path")
 	flag.Parse()
@@ -48,7 +53,7 @@ func main() {
 		_ = srv.Shutdown(context.Background())
 	}()
 
-	slog.Info("copyarr starting", "listen", cfg.ListenAddr, "rules", len(cfg.Rules))
+	slog.Info("copyarr starting", "version", version, "revision", revision, "listen", cfg.ListenAddr, "rules", len(cfg.Rules))
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("http server failed", "err", err)
 		os.Exit(1)
