@@ -31,6 +31,7 @@ type xValue struct {
 	String *string `xml:"string"`
 	Int    *int64  `xml:"int"`
 	I4     *int64  `xml:"i4"`
+	I8     *int64  `xml:"i8"`
 	Array  *xArray `xml:"array"`
 }
 type xArray struct {
@@ -113,6 +114,15 @@ func num(v xValue) int64 {
 	}
 	if v.I4 != nil {
 		return *v.I4
+	}
+	if v.I8 != nil {
+		return *v.I8
+	}
+	if v.String != nil {
+		var n int64
+		if _, err := fmt.Sscan(*v.String, &n); err == nil {
+			return n
+		}
 	}
 	return 0
 }
