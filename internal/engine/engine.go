@@ -638,7 +638,16 @@ func (e *Engine) transferJob(ctx context.Context, r config.Rule, job db.Job, ite
 		}
 	}
 	if r.Mode == "move" {
-		if isDir {
+		if isDir && (len(r.Includes) > 0 || len(r.Excludes) > 0) {
+			// A filtered directory transfer only owns the files selected by the
+			// rule. Purging the whole source root would also delete excluded
+			// files, so remove only the files that were actually committed.
+			for _, item := range items {
+				if err := e.rc.DeleteFile(transferCtx, rc.Target(r.Source, item.RelPath)); err != nil {
+					return fmt.Errorf("destination committed but filtered source delete failed for %s: %w", item.RelPath, err)
+				}
+			}
+		} else if isDir {
 			if err := e.rc.Purge(transferCtx, src); err != nil {
 				return fmt.Errorf("destination committed but source purge failed: %w", err)
 			}
