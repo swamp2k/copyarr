@@ -10,7 +10,7 @@
   <Project>https://github.com/swamp2k/copyarr</Project>
   <Overview>Persistent copy/move queue for rclone-backed transfers, with rTorrent awareness, staging, optional verification and HTTP status API.</Overview>
   <Category>Tools: Backup:</Category>
-  <WebUI>http://[IP]:[PORT:8686]/api/status</WebUI>
+  <WebUI>http://[IP]:[PORT:8686]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/swamp2k/copyarr/main/unraid/copyarr.xml</TemplateURL>
   <Icon/>
   <ExtraParams/>
