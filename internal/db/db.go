@@ -211,6 +211,28 @@ func (d *DB) SetMeta(key, v string) error {
 	return e
 }
 
+func (d *DB) DeleteMeta(key string) error {
+	_, err := d.Exec(`DELETE FROM meta WHERE key=?`, key)
+	return err
+}
+
+func (d *DB) MetaPrefix(prefix string) (map[string]string, error) {
+	rows, err := d.Query(`SELECT key,value FROM meta WHERE key LIKE ?`, prefix+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		out[k] = v
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) UpsertSeen(rule, key, rel string, size int64, mod, timeNow, state string) (Object, bool, error) {
 	var o Object
 	err := d.QueryRow(`SELECT id,rule_id,object_key,rel_path,size,mod_time,state,first_seen,last_seen,stable_since,attempts,last_error,completed_at,dest_path
