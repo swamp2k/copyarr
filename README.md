@@ -19,7 +19,7 @@ Copyarr is a small persistent transfer queue for automated copy/move jobs. It is
 
 ## Current status
 
-The transfer engine now uses persistent jobs rather than a file-only queue. Rules are still JSON-configured and the worker is intentionally single-transfer for predictable seedbox behaviour. Dynamic rule editing, Nexus registration, checksums and richer retry policy remain later iterations.
+The transfer engine uses persistent jobs and intentionally runs one transfer at a time for predictable seedbox behaviour. Copyarr now includes bounded automatic retries, persisted retry scheduling, job controls, and a small built-in Unraid-friendly dashboard. Retry count/wait can be changed at runtime and are persisted as SQLite overrides; broader dynamic rule editing, Nexus registration and checksums remain later iterations.
 
 ## Quick start
 
@@ -47,8 +47,10 @@ When enabled, Copyarr calls `d.multicall2` for hash, name, completion state and 
 ## API
 
 - `GET /health`
+- `GET /` — built-in dashboard with transfer status, recent jobs, controls and retry settings.
 - `GET /api/status` — active transfer, queue depth/bytes, job counts, progress, speed and ETA.
 - `GET /api/rules`
+- `PATCH /api/rules/{id}` — update `retry_count` and/or `retry_wait_seconds`; persisted in SQLite.
 - `GET /api/jobs?limit=100`
 - `GET /api/objects?limit=200`
 - `POST /api/scan`
