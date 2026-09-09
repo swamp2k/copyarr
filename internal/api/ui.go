@@ -106,7 +106,7 @@ async function refreshJobs(){
 async function refreshRules(){
  try{
   const rs=await api('/api/rules');
-  $('rules').innerHTML=rs.map(r=>'<div class="card" style="margin-top:8px"><div class="row" style="justify-content:space-between"><strong>'+esc(r.name||r.id)+'</strong><span class="muted">'+esc(r.id)+'</span></div><div class="row" style="margin-top:12px"><label>Automatic retries<input type="number" min="0" data-count="'+esc(r.id)+'" value="'+Number(r.retry_count??3)+'"></label><label>Retry wait (seconds)<input type="number" min="0" data-wait="'+esc(r.id)+'" value="'+Number(r.retry_wait_seconds??300)+'"></label><button onclick="saveRule('+JSON.stringify(r.id)+')">Save</button></div></div>').join('');
+  $('rules').innerHTML=rs.map(r=>'<div class="card" style="margin-top:8px"><div class="row" style="justify-content:space-between"><strong>'+esc(r.name||r.id)+'</strong><span class="muted">'+esc(r.id)+'</span></div><div class="row" style="margin-top:12px"><label>Automatic retries<input type="number" min="0" data-count="'+esc(r.id)+'" value="'+Number(r.retry_count??3)+'"></label><label>Retry wait (seconds)<input type="number" min="0" data-wait="'+esc(r.id)+'" value="'+Number(r.retry_wait_seconds??300)+'"></label><button data-rule="'+esc(r.id)+'" onclick="saveRule(this.dataset.rule)">Save</button></div></div>').join('');
  }catch(e){$('rules').textContent=e.message}
 }
 async function refresh(){await Promise.all([refreshStatus(),refreshJobs()])}
