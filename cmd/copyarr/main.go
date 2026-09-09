@@ -40,7 +40,6 @@ func main() {
 		slog.Error("prepare writable rclone config failed", "err", err)
 		os.Exit(1)
 	}
-	slog.Info("rclone config ready", "path", cfg.RcloneConfig, "origin", string(origin))
 	database, err := db.Open(filepath.Join(cfg.DataDir, "copyarr.db"))
 	if err != nil {
 		slog.Error("open db failed", "err", err)
@@ -53,6 +52,7 @@ func main() {
 		loggingEnabled = false
 	}
 	logging.Install(database, loggingEnabled)
+	slog.Info("rclone config ready", "path", cfg.RcloneConfig, "origin", string(origin))
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
