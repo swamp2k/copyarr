@@ -162,3 +162,60 @@ func TestPauseActiveJobDoesNotConsumeAttempt(t *testing.T) {
 		t.Fatalf("state=%q attempts=%d want paused/1", state, attempts)
 	}
 }
+
+func TestLogsCanBeStoredFilteredAndCleared(t *testing.T) {
+	d := openTestDB(t)
+	jobID := insertTestJob(t, d, "done", 1)
+	if err := d.AddLog("INFO", "copyarr", "global", nil, "{}"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.AddLog("INFO", "rclone", "job line", &jobID, "{"x":1}"); err != nil {
+		t.Fatal(err)
+	}
+	all, err := d.ListLogs(10, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("all logs=%d want 2", len(all))
+	}
+	jobLogs, err := d.ListLogs(10, &jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobLogs) != 1 || jobLogs[0].Message != "job line" {
+		t.Fatalf("job logs=%+v", jobLogs)
+	}
+	if err := d.ClearLogs(); err != nil {
+		t.Fatal(err)
+	}
+	all, err = d.ListLogs(10, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("logs remain after clear: %d", len(all))
+	}
+}
+
+func TestJobStatsPersistInOrder(t *testing.T) {
+	d := openTestDB(t)
+	jobID := insertTestJob(t, d, "copying", 1)
+	eta := int64(12)
+	if err := d.AddJobStat(jobID, "transferring", 10, 100, 5.5, &eta); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.AddJobStat(jobID, "verifying_final", 100, 100, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := d.ListJobStats(jobID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 2 {
+		t.Fatalf("stats=%d want 2", len(stats))
+	}
+	if stats[0].TransferredBytes != 10 || stats[1].Phase != "verifying_final" {
+		t.Fatalf("unexpected stats: %+v", stats)
+	}
+}
