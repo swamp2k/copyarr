@@ -76,6 +76,13 @@ func (s *Server) Handler() http.Handler {
 		}
 		write(w, map[string]any{"ok": true})
 	})
+	mux.HandleFunc("POST /api/job-definitions/{id}/reset", func(w http.ResponseWriter, r *http.Request) {
+		if err := s.eng.ResetJobDefinition(r.PathValue("id")); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		write(w, map[string]any{"ok": true, "id": r.PathValue("id")})
+	})
 	mux.HandleFunc("PATCH /api/rules/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		current, ok := s.eng.RetryPolicy(id)
@@ -195,8 +202,23 @@ func (s *Server) Handler() http.Handler {
 		}
 		write(w, map[string]any{"ok": q == nil, "question": q})
 	})
+	mux.HandleFunc("GET /api/remotes/{name}/usage", func(w http.ResponseWriter, r *http.Request) {
+		write(w, s.eng.RemoteUsage(r.PathValue("name")))
+	})
 	mux.HandleFunc("DELETE /api/remotes/{name}", func(w http.ResponseWriter, r *http.Request) {
-		if err := s.eng.DeleteRemote(r.Context(), r.PathValue("name")); err != nil {
+		name := r.PathValue("name")
+		// Deleting a remote that jobs still point at breaks them silently at
+		// the next scan, so it takes a deliberate second request to go through.
+		if usage := s.eng.RemoteUsage(name); len(usage) > 0 && r.URL.Query().Get("confirm") != "true" {
+			writeStatus(w, http.StatusConflict, map[string]any{
+				"error":   fmt.Sprintf("remote %q is used by %d job definition(s)", name, len(usage)),
+				"used_by": usage,
+				"confirm": "repeat this request with ?confirm=true to delete it anyway",
+				"blocked": true,
+			})
+			return
+		}
+		if err := s.eng.DeleteRemote(r.Context(), name); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -253,6 +275,11 @@ func (s *Server) Handler() http.Handler {
 }
 
 func write(w http.ResponseWriter, v any) {
+	writeStatus(w, http.StatusOK, v)
+}
+
+func writeStatus(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
 }

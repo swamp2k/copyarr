@@ -35,8 +35,8 @@ type ActiveTransfer struct {
 	SpeedBps         float64 `json:"speed_bps"`
 	ETASeconds       *int64  `json:"eta_seconds,omitempty"`
 	StartedAt        string  `json:"started_at"`
-	AttemptNumber     int     `json:"attempt_number"`
-	MaxAttempts       int     `json:"max_attempts"`
+	AttemptNumber    int     `json:"attempt_number"`
+	MaxAttempts      int     `json:"max_attempts"`
 }
 
 type RuleScanStatus struct {
@@ -56,13 +56,13 @@ type JobView struct {
 }
 
 type Status struct {
-	Service   string                   `json:"service"`
-	Version   string                   `json:"version"`
-	Revision  string                   `json:"revision"`
-	Scanning  bool                     `json:"scanning"`
-	Active    *ActiveTransfer          `json:"active,omitempty"`
-	Queue     db.QueueStats            `json:"queue"`
-	Jobs      map[string]int           `json:"jobs"`
+	Service   string                    `json:"service"`
+	Version   string                    `json:"version"`
+	Revision  string                    `json:"revision"`
+	Scanning  bool                      `json:"scanning"`
+	Active    *ActiveTransfer           `json:"active,omitempty"`
+	Queue     db.QueueStats             `json:"queue"`
+	Jobs      map[string]int            `json:"jobs"`
 	RuleScans map[string]RuleScanStatus `json:"rule_scans"`
 }
 
@@ -71,21 +71,54 @@ type RetryPolicy struct {
 	RetryWaitSeconds int `json:"retry_wait_seconds"`
 }
 
+// Job definition provenance. A rule either comes from config.json, which
+// Copyarr must not rewrite, or was created through the UI and lives in the
+// database.
+const (
+	OriginConfig = "config"
+	OriginUI     = "ui"
+)
+
+// RuleView is a rule as the API presents it: the rule itself plus where it came
+// from, so the UI can show that a config.json job is being masked by a UI edit
+// and offer to put it back.
+//
+// The field is "origin", not "source": config.Rule already has a Source
+// endpoint, and an embedded struct sharing a JSON name loses to the outer field
+// entirely, which would drop the transfer's source from the API.
+type RuleView struct {
+	config.Rule
+	Origin      string `json:"origin"`
+	HasOverride bool   `json:"has_override"`
+}
+
+// RemoteUsage records one job definition that refers to a remote, so deleting
+// that remote can explain exactly what it would break.
+type RemoteUsage struct {
+	JobID   string `json:"job_id"`
+	JobName string `json:"job_name"`
+	Role    string `json:"role"`
+}
+
 type Engine struct {
-	cfg        config.Config
-	db         *db.DB
-	rc         rc.Client
-	rules      []config.Rule
-	version    string
-	revision   string
-	wake       chan struct{}
-	mu         sync.Mutex
-	scanning   bool
+	cfg            config.Config
+	db             *db.DB
+	rc             rc.Client
+	rules          []config.Rule
+	version        string
+	revision       string
+	wake           chan struct{}
+	mu             sync.Mutex
+	scanning       bool
 	active         *ActiveTransfer
 	activeCancel   context.CancelFunc
 	controlActions map[int64]string
 	retryPolicies  map[string]RetryPolicy
 	ruleScans      map[string]RuleScanStatus
+	// overrides tracks which rule IDs have a stored definition in the database.
+	// A config.json rule with an override is being masked by a UI edit, which
+	// the UI surfaces so the masking is never silent.
+	overrides map[string]bool
 }
 
 type seenItem struct {
@@ -111,6 +144,7 @@ func New(cfg config.Config, d *db.DB, version, revision string) *Engine {
 		ruleScans:      make(map[string]RuleScanStatus),
 		controlActions: make(map[int64]string),
 		retryPolicies:  make(map[string]RetryPolicy),
+		overrides:      make(map[string]bool),
 	}
 	if stored, err := d.MetaPrefix("jobdef:"); err == nil {
 		for key, raw := range stored {
@@ -123,6 +157,7 @@ func New(cfg config.Config, d *db.DB, version, revision string) *Engine {
 				continue
 			}
 			e.upsertRuleLocked(r)
+			e.overrides[r.ID] = true
 		}
 	}
 	for _, r := range e.rules {
@@ -989,15 +1024,14 @@ func (e *Engine) SaveJobDefinition(r config.Rule) error {
 	e.mu.Lock()
 	e.upsertRuleLocked(r)
 	e.retryPolicies[r.ID] = p
+	e.overrides[r.ID] = true
 	e.mu.Unlock()
 	return nil
 }
 
 func (e *Engine) DeleteJobDefinition(id string) error {
-	for _, base := range e.cfg.Rules {
-		if base.ID == id {
-			return fmt.Errorf("job %q comes from config.json; disable or edit it instead of deleting it", id)
-		}
+	if e.isConfigRule(id) {
+		return fmt.Errorf("job %q comes from config.json, which Copyarr never rewrites; edit it there, or reset it to discard UI changes", id)
 	}
 	if err := e.db.DeleteMeta("jobdef:" + id); err != nil {
 		return err
@@ -1012,12 +1046,13 @@ func (e *Engine) DeleteJobDefinition(id string) error {
 	}
 	e.rules = out
 	delete(e.retryPolicies, id)
+	delete(e.overrides, id)
 	return nil
 }
 
-func (e *Engine) Rules() []config.Rule {
+func (e *Engine) Rules() []RuleView {
 	rules := e.rulesSnapshot()
-	out := make([]config.Rule, 0, len(rules))
+	out := make([]RuleView, 0, len(rules))
 	for _, base := range rules {
 		r, _ := e.rule(base.ID)
 		if r.RTorrent != nil {
@@ -1025,9 +1060,96 @@ func (e *Engine) Rules() []config.Rule {
 			cp.Password = ""
 			r.RTorrent = &cp
 		}
-		out = append(out, r)
+		view := RuleView{Rule: r, Origin: OriginUI}
+		if e.isConfigRule(r.ID) {
+			view.Origin = OriginConfig
+			view.HasOverride = e.hasOverride(r.ID)
+		}
+		out = append(out, view)
 	}
 	return out
+}
+
+// isConfigRule reports whether an ID was defined in config.json, which is the
+// file Copyarr reads but never writes.
+func (e *Engine) isConfigRule(id string) bool {
+	for _, base := range e.cfg.Rules {
+		if base.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Engine) hasOverride(id string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.overrides[id]
+}
+
+// configRule returns the untouched config.json definition for an ID.
+func (e *Engine) configRule(id string) (config.Rule, bool) {
+	for _, base := range e.cfg.Rules {
+		if base.ID == id {
+			return base, true
+		}
+	}
+	return config.Rule{}, false
+}
+
+// RemoteUsage lists the job definitions that read from or write to a remote.
+// Disabled jobs count: they still break if the remote disappears.
+func (e *Engine) RemoteUsage(name string) []RemoteUsage {
+	if name == "" {
+		return nil
+	}
+	var out []RemoteUsage
+	for _, r := range e.rulesSnapshot() {
+		src := r.Source.Remote == name
+		dst := r.Destination.Remote == name
+		if !src && !dst {
+			continue
+		}
+		role := "source"
+		switch {
+		case src && dst:
+			role = "source and destination"
+		case dst:
+			role = "destination"
+		}
+		out = append(out, RemoteUsage{JobID: r.ID, JobName: r.Name, Role: role})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].JobID < out[j].JobID })
+	return out
+}
+
+// ResetJobDefinition drops the stored override for a config.json job so the
+// definition in the file takes effect again. This is the way back from a UI
+// edit of a config-backed job, which would otherwise mask the file forever.
+func (e *Engine) ResetJobDefinition(id string) error {
+	base, ok := e.configRule(id)
+	if !ok {
+		return fmt.Errorf("job %q does not come from config.json; delete it instead of resetting it", id)
+	}
+	if err := e.db.DeleteMeta("jobdef:" + id); err != nil {
+		return err
+	}
+	if err := e.db.DeleteMeta("rule:" + id + ":retry_policy"); err != nil {
+		return err
+	}
+	restored := base
+	if err := config.NormalizeRule(&restored, 0); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	e.upsertRuleLocked(restored)
+	e.retryPolicies[id] = RetryPolicy{
+		RetryCount:       restored.RetryLimit(),
+		RetryWaitSeconds: int(restored.RetryWait() / time.Second),
+	}
+	delete(e.overrides, id)
+	e.mu.Unlock()
+	return nil
 }
 
 func (e *Engine) Remotes(ctx context.Context) ([]rc.RemoteInfo, error) {

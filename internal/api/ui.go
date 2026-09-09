@@ -69,6 +69,8 @@ p{margin:0}
 .btn-primary:hover:not(:disabled){background:var(--accent-hover);border-color:var(--accent-hover);color:#fff}
 .btn-danger{color:var(--bad);border-color:transparent}
 .btn-danger:hover:not(:disabled){color:var(--bad);border-color:var(--bad)}
+.btn-danger-solid{background:var(--bad);border-color:var(--bad);color:#fff}
+.btn-danger-solid:hover:not(:disabled){filter:brightness(1.08);color:#fff}
 .btn-sm{padding:4px 9px;font-size:11px}
 
 /* Layout blocks ----------------------------------------------------------- */
@@ -114,6 +116,12 @@ tbody tr:hover{background:var(--panel-2)}
 .badge.paused{color:var(--info);background:color-mix(in srgb,var(--info) 16%,transparent)}
 .badge.other{color:var(--muted);background:var(--panel-2)}
 .chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);border-radius:999px;padding:2px 9px;font-size:11px;color:var(--muted);white-space:nowrap}
+.chip.src{border-color:color-mix(in srgb,var(--info) 45%,transparent);color:var(--info)}
+.chip.src-edited{border-color:color-mix(in srgb,var(--warn) 55%,transparent);color:var(--warn)}
+.usage-list{margin:10px 0 0;padding:0;list-style:none;display:grid;gap:6px}
+.usage-list li{background:var(--inset);border:1px solid var(--line);border-radius:8px;padding:8px 11px;font-size:12px}
+.usage-list b{font-weight:600}
+.usage-list span{color:var(--dim)}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
 .filters{display:flex;gap:4px;flex-wrap:wrap}
 .filter{padding:5px 10px;font-size:11.5px;border-radius:7px}
@@ -322,6 +330,8 @@ details.adv>div{padding:6px 0 16px}
     </div>
     <div class="modal-body">
 
+      <div class="notice" id="jobProvenance" style="margin-bottom:18px" hidden></div>
+
       <div class="form-section">
         <div class="form-section-title">Identity</div>
         <div class="form-grid">
@@ -459,9 +469,28 @@ details.adv>div{padding:6px 0 16px}
     </div>
     <div class="modal-foot">
       <button class="btn btn-danger" id="jobDelete" data-act="job-del" hidden>Delete job</button>
+      <button class="btn" id="jobReset" data-act="job-reset" hidden>Reset to config.json</button>
       <span class="spacer"></span>
       <button class="btn" data-act="job-close">Cancel</button>
       <button class="btn btn-primary" data-act="job-save">Save job</button>
+    </div>
+  </div>
+</div>
+
+<!-- Confirmation for destructive actions ------------------------------------>
+<div class="overlay" id="confirmModal" hidden>
+  <div class="modal w-md" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <div class="modal-head">
+      <div>
+        <h2 id="confirmTitle">Are you sure?</h2>
+        <div class="dim" id="confirmSub"></div>
+      </div>
+    </div>
+    <div class="modal-body" id="confirmBody"></div>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <button class="btn" data-act="confirm-no">Cancel</button>
+      <button class="btn btn-primary" id="confirmYes" data-act="confirm-yes">Confirm</button>
     </div>
   </div>
 </div>
@@ -537,6 +566,31 @@ async function api(url, opt){
 }
 function jsonBody(v){
   return { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(v) };
+}
+
+// askConfirm replaces window.confirm so a destructive action can spell out what
+// it is about to break, rather than asking to approve a single line of text.
+var confirmResolve = null;
+function askConfirm(opts){
+  return new Promise(function(resolve){
+    confirmResolve = resolve;
+    $("confirmTitle").textContent = opts.title;
+    $("confirmSub").textContent = opts.subtitle || "";
+    $("confirmBody").innerHTML = opts.body || "";
+    var yes = $("confirmYes");
+    yes.textContent = opts.confirmLabel || "Confirm";
+    yes.className = "btn " + (opts.danger ? "btn-danger-solid" : "btn-primary");
+    $("confirmModal").hidden = false;
+    yes.focus();
+  });
+}
+function closeConfirm(answer){
+  $("confirmModal").hidden = true;
+  if(confirmResolve){
+    var resolve = confirmResolve;
+    confirmResolve = null;
+    resolve(answer);
+  }
 }
 
 /* State -------------------------------------------------------------------- */
@@ -674,6 +728,20 @@ function endpointText(ep){
   return remote ? remote + p : p;
 }
 
+// Where a job came from. config.json is read-only to Copyarr, so a UI edit of a
+// config job is stored as an override that masks the file - say so plainly
+// rather than letting the file look like it stopped taking effect.
+function provenanceChip(d){
+  if(d.origin !== "config"){
+    return '<span class="chip src">Created in the UI</span>';
+  }
+  if(d.has_override){
+    return '<span class="chip src-edited" title="A UI edit is masking the definition in config.json">' +
+      "config.json &middot; edited here</span>";
+  }
+  return '<span class="chip src">From config.json</span>';
+}
+
 function renderDefs(){
   var host = $("jobDefs");
   if(!defs.length){
@@ -699,6 +767,7 @@ function renderDefs(){
         "</div>" +
         '<span class="chip"><span class="dot' + (d.enabled ? "" : " off") + '"></span>' + (d.enabled ? "Enabled" : "Disabled") + "</span>" +
       "</div>" +
+      '<div style="margin-top:10px">' + provenanceChip(d) + "</div>" +
       '<div class="route">' +
         '<div class="route-end"><div class="route-label">Source</div>' +
           '<div class="route-value" title="' + esc(endpointText(d.source)) + '">' + esc(endpointText(d.source)) + "</div></div>" +
@@ -784,7 +853,27 @@ function openJobModal(id){
   $("jobModalSub").textContent = editingDef
     ? "Job ID cannot change once it exists."
     : "Each job carries its own transfer and retry policy.";
-  $("jobDelete").hidden = !editingDef;
+
+  var fromConfig = !!editingDef && editingDef.origin === "config";
+  // A config.json job can only be deleted by editing that file; the UI offers
+  // to drop its override instead, which is the way back to the file's version.
+  $("jobDelete").hidden = !editingDef || fromConfig;
+  $("jobReset").hidden = !fromConfig || !editingDef.has_override;
+
+  var notice = $("jobProvenance");
+  if(fromConfig){
+    notice.hidden = false;
+    notice.className = "notice" + (editingDef.has_override ? " busy" : "");
+    notice.innerHTML = editingDef.has_override
+      ? "This job comes from <strong>config.json</strong> and has been edited here. " +
+        "Copyarr never rewrites that file, so the version below is stored separately and masks it. " +
+        "Use <strong>Reset to config.json</strong> to discard these changes and follow the file again."
+      : "This job comes from <strong>config.json</strong>. Copyarr never rewrites that file, so saving " +
+        "here stores an override that masks it until you reset it.";
+  }else{
+    notice.hidden = true;
+  }
+
   $("jobModal").hidden = false;
   setTimeout(function(){ (editingDef ? $("defName") : $("defId")).focus(); }, 0);
 }
@@ -843,10 +932,39 @@ async function saveJob(){
 
 async function deleteJob(){
   if(!editingDef) return;
-  if(!confirm('Delete job "' + (editingDef.name || editingDef.id) + '"? Executions already recorded are kept.')) return;
+  var id = editingDef.id;
+  var ok = await askConfirm({
+    title: "Delete this job?",
+    subtitle: editingDef.name || id,
+    body: '<div class="notice">The definition is removed and nothing new will be queued for it. ' +
+      "Executions already recorded stay in the history.</div>",
+    confirmLabel: "Delete job",
+    danger: true
+  });
+  if(!ok) return;
   try{
-    await api("/api/job-definitions/" + encodeURIComponent(editingDef.id), { method: "DELETE" });
+    await api("/api/job-definitions/" + encodeURIComponent(id), { method: "DELETE" });
     toast("Job deleted");
+    closeJobModal();
+    await refreshDefs();
+  }catch(e){ toast(e.message, true); }
+}
+
+async function resetJob(){
+  if(!editingDef) return;
+  var id = editingDef.id;
+  var ok = await askConfirm({
+    title: "Reset to config.json?",
+    subtitle: editingDef.name || id,
+    body: '<div class="notice">The changes made here are discarded and this job follows ' +
+      "<strong>config.json</strong> again. The file itself is not touched.</div>",
+    confirmLabel: "Reset to config.json",
+    danger: true
+  });
+  if(!ok) return;
+  try{
+    await api("/api/job-definitions/" + encodeURIComponent(id) + "/reset", { method: "POST" });
+    toast("Job reset to config.json");
     closeJobModal();
     await refreshDefs();
   }catch(e){ toast(e.message, true); }
@@ -910,9 +1028,41 @@ async function testSavedRemote(name){
 }
 
 async function deleteRemote(name){
-  if(!confirm('Delete rclone remote "' + name + '"? Jobs pointing at it will stop working.')) return;
+  // Look up what would break first, so the warning names the affected jobs
+  // instead of asking to approve a generic sentence. The server refuses the
+  // delete without confirm=true as well, so this cannot be skipped by accident.
+  var usage = [];
   try{
-    await api("/api/remotes/" + encodeURIComponent(name), { method: "DELETE" });
+    usage = await api("/api/remotes/" + encodeURIComponent(name) + "/usage") || [];
+  }catch(e){ /* fall through to the plain warning; the server still guards */ }
+
+  var body, confirmLabel;
+  if(usage.length){
+    body = '<div class="notice err"><strong>' + usage.length + " job definition" +
+      (usage.length === 1 ? "" : "s") + "</strong> still point at <strong>" + esc(name) +
+      "</strong>. Deleting it will break " + (usage.length === 1 ? "that job" : "them") +
+      " at the next scan.</div>" +
+      '<ul class="usage-list">' + usage.map(function(u){
+        return "<li><b>" + esc(u.job_name || u.job_id) + "</b> <span>" + esc(u.job_id) +
+          " &middot; used as " + esc(u.role) + "</span></li>";
+      }).join("") + "</ul>";
+    confirmLabel = "Delete anyway";
+  }else{
+    body = '<div class="notice">No job definition refers to this remote.</div>';
+    confirmLabel = "Delete remote";
+  }
+
+  var ok = await askConfirm({
+    title: usage.length ? "This remote is still in use" : "Delete this remote?",
+    subtitle: name,
+    body: body,
+    confirmLabel: confirmLabel,
+    danger: true
+  });
+  if(!ok) return;
+
+  try{
+    await api("/api/remotes/" + encodeURIComponent(name) + "?confirm=true", { method: "DELETE" });
     delete remoteTests[name];
     toast("Remote deleted");
     await refreshRemotes();
@@ -1371,6 +1521,9 @@ document.addEventListener("click", function(ev){
   else if(act === "job-close") closeJobModal();
   else if(act === "job-save") saveJob();
   else if(act === "job-del") deleteJob();
+  else if(act === "job-reset") resetJob();
+  else if(act === "confirm-yes") closeConfirm(true);
+  else if(act === "confirm-no") closeConfirm(false);
   else if(act === "remote-new") openRemoteWizard(null);
   else if(act === "remote-edit") openRemoteWizard(t.dataset.name);
   else if(act === "remote-del") deleteRemote(t.dataset.name);
@@ -1412,13 +1565,18 @@ document.addEventListener("click", function(ev){
 Array.prototype.forEach.call(document.querySelectorAll(".overlay"), function(o){
   o.addEventListener("mousedown", function(ev){
     if(ev.target !== o) return;
-    if(o.id === "jobModal") closeJobModal(); else closeRemoteWizard();
+    if(o.id === "confirmModal") closeConfirm(false);
+    else if(o.id === "jobModal") closeJobModal();
+    else closeRemoteWizard();
   });
 });
 
+// Escape dismisses the topmost layer only, so it cannot close the editor
+// underneath a confirmation that is still waiting for an answer.
 document.addEventListener("keydown", function(ev){
   if(ev.key !== "Escape") return;
-  if(!$("remoteModal").hidden) closeRemoteWizard();
+  if(!$("confirmModal").hidden) closeConfirm(false);
+  else if(!$("remoteModal").hidden) closeRemoteWizard();
   else if(!$("jobModal").hidden) closeJobModal();
 });
 
