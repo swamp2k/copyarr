@@ -71,7 +71,6 @@ func (c Client) runWith(ctx context.Context, configPath string, args ...string) 
 	return out, nil
 }
 
-
 func (c Client) runCopyJSONStats(ctx context.Context, args []string, progress ProgressFunc) error {
 	base := []string{}
 	if c.ConfigPath != "" {
@@ -161,7 +160,6 @@ func (c Client) runCopy(ctx context.Context, args []string, progress ProgressFun
 	}
 	return nil
 }
-
 
 type RemoteInfo struct {
 	Name string `json:"name"`
@@ -516,6 +514,15 @@ func (c Client) RemoteConfig(ctx context.Context, name string) (RemoteDetail, er
 	if err != nil {
 		return RemoteDetail{}, err
 	}
+	return parseRedactedConfig(name, out), nil
+}
+
+// parseRedactedConfig turns "rclone config redacted" output into a RemoteDetail.
+// rclone replaces every value it considers sensitive with XXX - which is
+// broader than passwords, covering host and user on sftp for example. Those
+// keys are reported by name only; their values are never carried over, so a
+// stored secret cannot reach the browser through this path.
+func parseRedactedConfig(name string, out []byte) RemoteDetail {
 	detail := RemoteDetail{Name: name, Parameters: map[string]string{}}
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
@@ -538,7 +545,7 @@ func (c Client) RemoteConfig(ctx context.Context, name string) (RemoteDetail, er
 		}
 	}
 	sort.Strings(detail.Redacted)
-	return detail, nil
+	return detail
 }
 
 func sortedKeys(m map[string]string) []string {

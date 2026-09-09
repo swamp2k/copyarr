@@ -88,3 +88,76 @@ func TestSortedKeysIsDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// Real "rclone config redacted" output for an sftp remote created with a
+// password. rclone redacts every value it marks sensitive, not just secrets.
+const redactedSFTP = `[box1]
+type = sftp
+host = XXX
+user = XXX
+pass = XXX
+port = 2222
+`
+
+func TestParseRedactedConfigNeverCarriesRedactedValues(t *testing.T) {
+	detail := parseRedactedConfig("box1", []byte(redactedSFTP))
+
+	if detail.Name != "box1" {
+		t.Errorf("Name = %q", detail.Name)
+	}
+	if detail.Type != "sftp" {
+		t.Errorf("Type = %q, want sftp", detail.Type)
+	}
+
+	// Redacted keys are reported by name only.
+	wantRedacted := []string{"host", "pass", "user"}
+	if len(detail.Redacted) != len(wantRedacted) {
+		t.Fatalf("Redacted = %v, want %v", detail.Redacted, wantRedacted)
+	}
+	for i, k := range wantRedacted {
+		if detail.Redacted[i] != k {
+			t.Fatalf("Redacted = %v, want %v (sorted)", detail.Redacted, wantRedacted)
+		}
+	}
+
+	// Nothing redacted may appear in the parameters that reach the browser,
+	// not even rclone's XXX placeholder masquerading as a real value.
+	for _, k := range wantRedacted {
+		if v, present := detail.Parameters[k]; present {
+			t.Errorf("redacted key %q leaked into Parameters as %q", k, v)
+		}
+	}
+	for k, v := range detail.Parameters {
+		if v == "XXX" {
+			t.Errorf("parameter %q kept rclone's redaction placeholder as a value", k)
+		}
+	}
+
+	// Non-sensitive values still come through so the edit form can prefill.
+	if detail.Parameters["port"] != "2222" {
+		t.Errorf("port = %q, want 2222", detail.Parameters["port"])
+	}
+	if _, present := detail.Parameters["type"]; present {
+		t.Error("type belongs in Type, not Parameters")
+	}
+}
+
+func TestParseRedactedConfigIgnoresSectionsAndComments(t *testing.T) {
+	in := []byte("# a comment\n\n[box1]\ntype = local\nnot a pair\ncopy_links = true\n")
+	detail := parseRedactedConfig("box1", in)
+	if detail.Type != "local" {
+		t.Errorf("Type = %q", detail.Type)
+	}
+	if len(detail.Parameters) != 1 || detail.Parameters["copy_links"] != "true" {
+		t.Errorf("Parameters = %v, want only copy_links", detail.Parameters)
+	}
+}
+
+func TestParseRedactedConfigKeepsValuesContainingEquals(t *testing.T) {
+	// Base64 and connection strings routinely contain "=", so only the first
+	// separator may be treated as the key/value split.
+	detail := parseRedactedConfig("r", []byte("[r]\ntype = s3\nsecret = abc==def\n"))
+	if got := detail.Parameters["secret"]; got != "abc==def" {
+		t.Errorf("secret = %q, want abc==def", got)
+	}
+}
