@@ -34,7 +34,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/jobs", func(w http.ResponseWriter, r *http.Request) {
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-		items, err := s.eng.DB().ListJobs(limit)
+		items, err := s.eng.Jobs(limit)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -63,12 +63,8 @@ func (s *Server) Handler() http.Handler {
 		}
 		action := parts[3]
 		switch action {
-		case "retry", "resume":
-			err = s.eng.DB().RequeueJob(id)
-		case "pause":
-			err = s.eng.DB().PauseJob(id)
-		case "cancel":
-			err = s.eng.DB().CancelJob(id)
+		case "retry", "resume", "pause", "cancel":
+			err = s.eng.ControlJob(id, action)
 		default:
 			http.NotFound(w, r)
 			return
