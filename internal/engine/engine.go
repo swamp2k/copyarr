@@ -455,19 +455,19 @@ func (e *Engine) worker(ctx context.Context) {
 		}
 
 		attempt := job.Attempts + 1
-		slog.Error("transfer failed", "job", job.ID, "name", job.DisplayName, "attempt", attempt, "max_attempts", r.RetryCount+1, "err", err)
-		if attempt <= r.RetryCount {
-			retryAt := time.Now().UTC().Add(time.Duration(r.RetryWaitSeconds) * time.Second)
+		slog.Error("transfer failed", "job", job.ID, "name", job.DisplayName, "attempt", attempt, "max_attempts", r.RetryLimit()+1, "err", err)
+		if attempt <= r.RetryLimit() {
+			retryAt := time.Now().UTC().Add(r.RetryWait())
 			if dbErr := e.db.FailJob(job.ID, err.Error(), &retryAt); dbErr != nil {
 				slog.Error("schedule retry failed", "job", job.ID, "err", dbErr)
 			} else {
-				slog.Info("job retry scheduled", "job", job.ID, "retry_at", retryAt.Format(time.RFC3339), "next_attempt", attempt+1, "max_attempts", r.RetryCount+1)
+				slog.Info("job retry scheduled", "job", job.ID, "retry_at", retryAt.Format(time.RFC3339), "next_attempt", attempt+1, "max_attempts", r.RetryLimit()+1)
 			}
 		} else {
 			if dbErr := e.db.FailJob(job.ID, err.Error(), nil); dbErr != nil {
 				slog.Error("mark job failed failed", "job", job.ID, "err", dbErr)
 			} else {
-				slog.Error("job retries exhausted", "job", job.ID, "attempts", attempt, "max_attempts", r.RetryCount+1)
+				slog.Error("job retries exhausted", "job", job.ID, "attempts", attempt, "max_attempts", r.RetryLimit()+1)
 			}
 		}
 	}
@@ -612,7 +612,7 @@ func (e *Engine) beginActive(job db.Job, r config.Rule, cancel context.CancelFun
 		JobID: job.ID, RuleID: job.RuleID, Name: job.DisplayName, Kind: job.Kind,
 		Path: job.RelRoot, Phase: "transferring", Verification: r.Verification,
 		MultiThread: r.MultiThreadStreams > 1, TotalBytes: job.TotalBytes, StartedAt: now,
-		AttemptNumber: job.Attempts + 1, MaxAttempts: r.RetryCount + 1,
+		AttemptNumber: job.Attempts + 1, MaxAttempts: r.RetryLimit() + 1,
 	}
 	e.activeCancel = cancel
 }
@@ -763,7 +763,7 @@ func (e *Engine) Jobs(limit int) ([]JobView, error) {
 	for _, j := range jobs {
 		maxAttempts := 1
 		if r, ok := e.rule(j.RuleID); ok {
-			maxAttempts = r.RetryCount + 1
+			maxAttempts = r.RetryLimit() + 1
 		}
 		attempt := j.Attempts
 		if j.State == "queued" && attempt == 0 {
