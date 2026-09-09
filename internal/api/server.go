@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/swamp2k/copyarr/internal/config"
 	"github.com/swamp2k/copyarr/internal/engine"
 )
 
@@ -40,6 +41,41 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/rules", func(w http.ResponseWriter, r *http.Request) {
 		write(w, s.eng.Rules())
 	})
+	mux.HandleFunc("GET /api/job-definitions", func(w http.ResponseWriter, r *http.Request) {
+		write(w, s.eng.Rules())
+	})
+	mux.HandleFunc("POST /api/job-definitions", func(w http.ResponseWriter, r *http.Request) {
+		var def config.Rule
+		if err := json.NewDecoder(r.Body).Decode(&def); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+		if err := s.eng.SaveJobDefinition(def); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		write(w, map[string]any{"ok": true, "id": def.ID})
+	})
+	mux.HandleFunc("PUT /api/job-definitions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var def config.Rule
+		if err := json.NewDecoder(r.Body).Decode(&def); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+		def.ID = r.PathValue("id")
+		if err := s.eng.SaveJobDefinition(def); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		write(w, map[string]any{"ok": true, "id": def.ID})
+	})
+	mux.HandleFunc("DELETE /api/job-definitions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if err := s.eng.DeleteJobDefinition(r.PathValue("id")); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		write(w, map[string]any{"ok": true})
+	})
 	mux.HandleFunc("PATCH /api/rules/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		current, ok := s.eng.RetryPolicy(id)
@@ -69,6 +105,66 @@ func (s *Server) Handler() http.Handler {
 		}
 		policy, _ := s.eng.RetryPolicy(id)
 		write(w, policy)
+	})
+	mux.HandleFunc("GET /api/remotes", func(w http.ResponseWriter, r *http.Request) {
+		items, err := s.eng.Remotes(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		write(w, items)
+	})
+	mux.HandleFunc("GET /api/remotes/providers", func(w http.ResponseWriter, r *http.Request) {
+		raw, err := s.eng.RemoteProviders(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(raw)
+	})
+	mux.HandleFunc("POST /api/remotes", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Name       string            `json:"name"`
+			Type       string            `json:"type"`
+			Parameters map[string]string `json:"parameters"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+		if req.Name == "" || req.Type == "" {
+			http.Error(w, "name and type are required", http.StatusBadRequest)
+			return
+		}
+		q, err := s.eng.CreateRemote(r.Context(), req.Name, req.Type, req.Parameters)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		write(w, map[string]any{"ok": q == nil, "question": q})
+	})
+	mux.HandleFunc("PATCH /api/remotes/{name}", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Parameters map[string]string `json:"parameters"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+		q, err := s.eng.UpdateRemote(r.Context(), r.PathValue("name"), req.Parameters)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		write(w, map[string]any{"ok": q == nil, "question": q})
+	})
+	mux.HandleFunc("DELETE /api/remotes/{name}", func(w http.ResponseWriter, r *http.Request) {
+		if err := s.eng.DeleteRemote(r.Context(), r.PathValue("name")); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		write(w, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("GET /api/jobs", func(w http.ResponseWriter, r *http.Request) {
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
