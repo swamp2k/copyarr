@@ -134,6 +134,17 @@ tbody tr:hover{background:var(--panel-2)}
 .entity-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
 .entity-title{font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .entity-foot{display:flex;gap:6px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap}
+.remote-grid{grid-template-columns:repeat(auto-fill,minmax(300px,440px))}
+.remote-entity{padding:12px 14px}
+.remote-main{display:flex;align-items:center;gap:12px;min-width:0}
+.remote-id{min-width:0;flex:1}
+.remote-meta{display:flex;align-items:center;gap:8px;margin-top:2px}
+.remote-status{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;border:1px solid var(--line);font-size:11px;line-height:1.2;white-space:nowrap}
+.remote-status.ok{color:var(--good);border-color:color-mix(in srgb,var(--good) 45%,transparent);background:color-mix(in srgb,var(--good) 10%,transparent)}
+.remote-status.err{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 45%,transparent);background:color-mix(in srgb,var(--bad) 10%,transparent)}
+.remote-status.busy{color:var(--accent-text);border-color:color-mix(in srgb,var(--accent) 45%,transparent);background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.remote-actions{display:flex;gap:5px;flex:none}
+.remote-actions .btn{padding:5px 8px}
 .route{display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center;margin-top:12px;background:var(--inset);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
 .route-end{min-width:0}
 .route-label{font-size:9.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;font-weight:600}
@@ -208,6 +219,10 @@ details.adv>div{padding:6px 0 16px}
 @media(max-width:900px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:620px){
   .shell{padding:16px 14px 56px}
+  .remote-grid{grid-template-columns:1fr}
+  .remote-main{align-items:flex-start;flex-wrap:wrap}
+  .remote-actions{width:100%;justify-content:flex-end}
+  .remote-status{max-width:100%;white-space:normal}
   .form-grid{grid-template-columns:1fr}
   .form-grid .wide{grid-column:auto}
   .param-row{grid-template-columns:1fr}
@@ -979,25 +994,24 @@ function renderRemotes(){
       '<button class="btn btn-primary" style="margin-top:16px" data-act="remote-new">+ Add your first remote</button></div>';
     return;
   }
-  host.innerHTML = '<div class="card-grid">' + remotes.map(function(r){
+  host.innerHTML = '<div class="card-grid remote-grid">' + remotes.map(function(r){
     var t = remoteTests[r.name];
-    var notice = "";
+    var status = "";
     if(t){
       var cls = t.state === "busy" ? "busy" : (t.state === "ok" ? "ok" : "err");
-      notice = '<div class="notice ' + cls + '" style="margin-top:12px">' + esc(t.message) + "</div>";
+      status = '<span class="remote-status ' + cls + '">' + esc(t.message) + "</span>";
     }
-    return '<div class="entity">' +
-      '<div class="entity-top">' +
-        '<div style="min-width:0">' +
+    return '<div class="entity remote-entity">' +
+      '<div class="remote-main">' +
+        '<div class="remote-id">' +
           '<div class="entity-title" title="' + esc(r.name) + '">' + esc(r.name) + "</div>" +
-          '<div class="dim">' + esc(r.type || "unknown type") + "</div>" +
+          '<div class="remote-meta"><span class="dim">' + esc(r.type || "unknown type") + "</span>" + status + "</div>" +
         "</div>" +
-      "</div>" +
-      notice +
-      '<div class="entity-foot">' +
-        '<button class="btn btn-sm" data-act="remote-test" data-name="' + esc(r.name) + '"' + (t && t.state === "busy" ? " disabled" : "") + ">Test</button>" +
-        '<button class="btn btn-sm" data-act="remote-edit" data-name="' + esc(r.name) + '">Edit</button>' +
-        '<button class="btn btn-sm btn-danger" data-act="remote-del" data-name="' + esc(r.name) + '">Delete</button>' +
+        '<div class="remote-actions">' +
+          '<button class="btn btn-sm" data-act="remote-test" data-name="' + esc(r.name) + '"' + (t && t.state === "busy" ? " disabled" : "") + ">Test</button>" +
+          '<button class="btn btn-sm" data-act="remote-edit" data-name="' + esc(r.name) + '">Edit</button>' +
+          '<button class="btn btn-sm btn-danger" data-act="remote-del" data-name="' + esc(r.name) + '">Delete</button>' +
+        "</div>" +
       "</div>" +
     "</div>";
   }).join("") + "</div>";
