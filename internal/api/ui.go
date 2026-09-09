@@ -769,9 +769,9 @@ function renderJobs(){
     var trailing = j.next_retry_at
       ? "Retry at " + new Date(j.next_retry_at).toLocaleTimeString()
       : (j.last_error || "-");
-    return "<tr>" +
+    return '<tr data-act="execution-open" data-id="' + j.id + '" style="cursor:pointer">' +
       '<td class="dim num">' + j.id + "</td>" +
-      '<td><div class="cell-name clickable" data-act="execution-open" data-id="' + j.id + '" title="Open transfer details">' + esc(j.display_name) + "</div></td>" +
+      '<td><div class="cell-name" title="Open transfer details">' + esc(j.display_name) + "</div></td>" +
       "<td>" + badge(j.state) + "</td>" +
       '<td class="num">' + esc(attempt) + "</td>" +
       '<td class="hide-sm num">' + bytes(j.total_bytes) + "</td>" +
@@ -1913,7 +1913,7 @@ setInterval(function(){
 }, 3000);
 setInterval(function(){
   if(!$("executionModal").hidden && executionDetail && executionDetail.job && executionDetail.job.state === "copying"){
-    openExecution(executionDetail.job.id);
+    api("/api/jobs/" + executionDetail.job.id).then(renderExecution).catch(function(){});
   }
 }, 3000);
 </script>
