@@ -65,6 +65,11 @@ type Status struct {
 	RuleScans map[string]RuleScanStatus `json:"rule_scans"`
 }
 
+type RetryPolicy struct {
+	RetryCount       int `json:"retry_count"`
+	RetryWaitSeconds int `json:"retry_wait_seconds"`
+}
+
 type Engine struct {
 	cfg        config.Config
 	db         *db.DB
@@ -77,6 +82,7 @@ type Engine struct {
 	active         *ActiveTransfer
 	activeCancel   context.CancelFunc
 	controlActions map[int64]string
+	retryPolicies  map[string]RetryPolicy
 	ruleScans      map[string]RuleScanStatus
 }
 
@@ -92,16 +98,28 @@ func New(cfg config.Config, d *db.DB, version, revision string) *Engine {
 	if revision == "" {
 		revision = "unknown"
 	}
-	return &Engine{
-		cfg:       cfg,
-		db:        d,
-		rc:        rc.Client{ConfigPath: cfg.RcloneConfig},
-		version:   version,
-		revision:  revision,
-		wake:      make(chan struct{}, 1),
+	e := &Engine{
+		cfg:            cfg,
+		db:             d,
+		rc:             rc.Client{ConfigPath: cfg.RcloneConfig},
+		version:        version,
+		revision:       revision,
+		wake:           make(chan struct{}, 1),
 		ruleScans:      make(map[string]RuleScanStatus),
 		controlActions: make(map[int64]string),
+		retryPolicies:  make(map[string]RetryPolicy),
 	}
+	for _, r := range cfg.Rules {
+		p := RetryPolicy{RetryCount: r.RetryLimit(), RetryWaitSeconds: int(r.RetryWait() / time.Second)}
+		if raw, ok, err := d.Meta("rule:" + r.ID + ":retry_policy"); err == nil && ok {
+			var count, wait int
+			if _, scanErr := fmt.Sscanf(raw, "%d,%d", &count, &wait); scanErr == nil && count >= 0 && wait >= 0 {
+				p = RetryPolicy{RetryCount: count, RetryWaitSeconds: wait}
+			}
+		}
+		e.retryPolicies[r.ID] = p
+	}
+	return e
 }
 
 func (e *Engine) Run(ctx context.Context) {
@@ -870,21 +888,58 @@ func (e *Engine) cleanupRule(ctx context.Context, r config.Rule) error {
 func (e *Engine) rule(id string) (config.Rule, bool) {
 	for _, r := range e.cfg.Rules {
 		if r.ID == id {
+			e.mu.Lock()
+			p, ok := e.retryPolicies[id]
+			e.mu.Unlock()
+			if ok {
+				count := p.RetryCount
+				wait := p.RetryWaitSeconds
+				r.RetryCount = &count
+				r.RetryWaitSeconds = &wait
+			}
 			return r, true
 		}
 	}
 	return config.Rule{}, false
 }
 
+func (e *Engine) RetryPolicy(ruleID string) (RetryPolicy, bool) {
+	if _, ok := e.rule(ruleID); !ok {
+		return RetryPolicy{}, false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	p, ok := e.retryPolicies[ruleID]
+	return p, ok
+}
+
+func (e *Engine) UpdateRetryPolicy(ruleID string, count, waitSeconds int) error {
+	if count < 0 || waitSeconds < 0 {
+		return fmt.Errorf("retry_count and retry_wait_seconds must be >= 0")
+	}
+	if _, ok := e.rule(ruleID); !ok {
+		return fmt.Errorf("rule %q not found", ruleID)
+	}
+	p := RetryPolicy{RetryCount: count, RetryWaitSeconds: waitSeconds}
+	if err := e.db.SetMeta("rule:"+ruleID+":retry_policy", fmt.Sprintf("%d,%d", count, waitSeconds)); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	e.retryPolicies[ruleID] = p
+	e.mu.Unlock()
+	return nil
+}
+
 func (e *Engine) Rules() []config.Rule {
-	out := make([]config.Rule, len(e.cfg.Rules))
-	copy(out, e.cfg.Rules)
-	for i := range out {
-		if out[i].RTorrent != nil {
-			cp := *out[i].RTorrent
+	out := make([]config.Rule, 0, len(e.cfg.Rules))
+	for _, base := range e.cfg.Rules {
+		r, _ := e.rule(base.ID)
+		if r.RTorrent != nil {
+			cp := *r.RTorrent
 			cp.Password = ""
-			out[i].RTorrent = &cp
+			r.RTorrent = &cp
 		}
+		out = append(out, r)
 	}
 	return out
 }
