@@ -67,7 +67,9 @@ func (c Client) runWith(ctx context.Context, configPath string, args ...string) 
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("rclone %v: %w: %s", args, err, strings.TrimSpace(stderr.String()))
+		// Do not echo argv here: config create/update arguments may contain
+		// credentials. rclone's stderr is enough to diagnose the failure.
+		return nil, fmt.Errorf("rclone command failed: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return out, nil
 }
