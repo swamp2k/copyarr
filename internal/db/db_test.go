@@ -146,3 +146,19 @@ func TestOpenMigratesExistingJobsTable(t *testing.T) {
 		t.Fatal("next_retry_at column was not added")
 	}
 }
+
+func TestPauseActiveJobDoesNotConsumeAttempt(t *testing.T) {
+	d := openTestDB(t)
+	id := insertTestJob(t, d, "copying", 2)
+	if err := d.PauseJob(id); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	var attempts int
+	if err := d.QueryRow(`SELECT state,attempts FROM jobs WHERE id=?`, id).Scan(&state, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if state != "paused" || attempts != 1 {
+		t.Fatalf("state=%q attempts=%d want paused/1", state, attempts)
+	}
+}
