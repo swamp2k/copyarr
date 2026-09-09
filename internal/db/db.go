@@ -48,6 +48,7 @@ type Job struct {
 	StartedAt   *string `json:"started_at,omitempty"`
 	CompletedAt *string `json:"completed_at,omitempty"`
 	DestPath    string  `json:"dest_path"`
+	NextRetryAt *string `json:"next_retry_at,omitempty"`
 }
 
 type JobItem struct {
@@ -438,6 +439,27 @@ func (d *DB) PromoteDueRetries() error {
 	return tx.Commit()
 }
 
+func (d *DB) RetryJob(id int64) error {
+	ts := now()
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE jobs SET state='queued',attempts=0,updated_at=?,last_error='',next_retry_at=NULL WHERE id=? AND state IN ('retry_wait','failed')`, ts, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("job %d is not retryable", id)
+	}
+	if _, err = tx.Exec(`UPDATE objects SET state='queued',attempts=0,last_error='' WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?) AND state IN ('retry_wait','failed')`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (d *DB) RequeueJob(id int64) error {
 	ts := now()
 	tx, err := d.Begin()
@@ -445,15 +467,15 @@ func (d *DB) RequeueJob(id int64) error {
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE jobs SET state='queued',updated_at=?,last_error='',next_retry_at=NULL WHERE id=? AND state IN ('retry_wait','paused','failed')`, ts, id)
+	res, err := tx.Exec(`UPDATE jobs SET state='queued',updated_at=?,last_error='',next_retry_at=NULL WHERE id=? AND state='paused'`, ts, id)
 	if err != nil {
 		return err
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("job %d is not retryable/resumable", id)
+		return fmt.Errorf("job %d is not resumable", id)
 	}
-	if _, err = tx.Exec(`UPDATE objects SET state='queued',last_error='' WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?) AND state IN ('retry_wait','paused','failed')`, id); err != nil {
+	if _, err = tx.Exec(`UPDATE objects SET state='queued',last_error='' WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?) AND state='paused'`, id); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -466,7 +488,7 @@ func (d *DB) PauseJob(id int64) error {
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE jobs SET state='paused',updated_at=?,next_retry_at=NULL WHERE id=? AND state IN ('queued','retry_wait')`, ts, id)
+	res, err := tx.Exec(`UPDATE jobs SET state='paused',updated_at=?,next_retry_at=NULL WHERE id=? AND state IN ('queued','retry_wait','copying')`, ts, id)
 	if err != nil {
 		return err
 	}
@@ -474,7 +496,7 @@ func (d *DB) PauseJob(id int64) error {
 	if n == 0 {
 		return fmt.Errorf("job %d cannot be paused in its current state", id)
 	}
-	if _, err = tx.Exec(`UPDATE objects SET state='paused' WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?) AND state IN ('queued','retry_wait')`, id); err != nil {
+	if _, err = tx.Exec(`UPDATE objects SET state='paused' WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?) AND state IN ('queued','retry_wait','copying')`, id); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -487,7 +509,7 @@ func (d *DB) CancelJob(id int64) error {
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE jobs SET state='cancelled',updated_at=?,next_retry_at=NULL WHERE id=? AND state IN ('queued','retry_wait','paused')`, ts, id)
+	res, err := tx.Exec(`UPDATE jobs SET state='cancelled',updated_at=?,next_retry_at=NULL WHERE id=? AND state IN ('queued','retry_wait','paused','copying')`, ts, id)
 	if err != nil {
 		return err
 	}
@@ -495,7 +517,7 @@ func (d *DB) CancelJob(id int64) error {
 	if n == 0 {
 		return fmt.Errorf("job %d cannot be cancelled in its current state", id)
 	}
-	if _, err = tx.Exec(`UPDATE objects SET state='cancelled' WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?) AND state IN ('queued','retry_wait','paused')`, id); err != nil {
+	if _, err = tx.Exec(`UPDATE objects SET state='cancelled' WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?) AND state IN ('queued','retry_wait','paused','copying')`, id); err != nil {
 		return err
 	}
 	return tx.Commit()
