@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"path"
@@ -74,6 +75,7 @@ type Engine struct {
 	cfg        config.Config
 	db         *db.DB
 	rc         rc.Client
+	rules      []config.Rule
 	version    string
 	revision   string
 	wake       chan struct{}
@@ -102,6 +104,7 @@ func New(cfg config.Config, d *db.DB, version, revision string) *Engine {
 		cfg:            cfg,
 		db:             d,
 		rc:             rc.Client{ConfigPath: cfg.RcloneConfig},
+		rules:          append([]config.Rule(nil), cfg.Rules...),
 		version:        version,
 		revision:       revision,
 		wake:           make(chan struct{}, 1),
@@ -109,7 +112,20 @@ func New(cfg config.Config, d *db.DB, version, revision string) *Engine {
 		controlActions: make(map[int64]string),
 		retryPolicies:  make(map[string]RetryPolicy),
 	}
-	for _, r := range cfg.Rules {
+	if stored, err := d.MetaPrefix("jobdef:"); err == nil {
+		for key, raw := range stored {
+			var r config.Rule
+			if json.Unmarshal([]byte(raw), &r) != nil {
+				continue
+			}
+			if err := config.NormalizeRule(&r, len(e.rules)); err != nil {
+				slog.Warn("ignoring invalid persisted job definition", "key", key, "err", err)
+				continue
+			}
+			e.upsertRuleLocked(r)
+		}
+	}
+	for _, r := range e.rules {
 		p := RetryPolicy{RetryCount: r.RetryLimit(), RetryWaitSeconds: int(r.RetryWait() / time.Second)}
 		if raw, ok, err := d.Meta("rule:" + r.ID + ":retry_policy"); err == nil && ok {
 			var count, wait int
@@ -169,7 +185,7 @@ func (e *Engine) scanAll(ctx context.Context) {
 		e.mu.Unlock()
 	}()
 
-	for _, r := range e.cfg.Rules {
+	for _, r := range e.rulesSnapshot() {
 		if !r.Enabled {
 			continue
 		}
@@ -886,13 +902,28 @@ func (e *Engine) cleanupRule(ctx context.Context, r config.Rule) error {
 	return nil
 }
 
+func (e *Engine) rulesSnapshot() []config.Rule {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]config.Rule(nil), e.rules...)
+}
+
+func (e *Engine) upsertRuleLocked(r config.Rule) {
+	for i := range e.rules {
+		if e.rules[i].ID == r.ID {
+			e.rules[i] = r
+			return
+		}
+	}
+	e.rules = append(e.rules, r)
+}
+
 func (e *Engine) rule(id string) (config.Rule, bool) {
-	for _, r := range e.cfg.Rules {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, r := range e.rules {
 		if r.ID == id {
-			e.mu.Lock()
-			p, ok := e.retryPolicies[id]
-			e.mu.Unlock()
-			if ok {
+			if p, ok := e.retryPolicies[id]; ok {
 				count := p.RetryCount
 				wait := p.RetryWaitSeconds
 				r.RetryCount = &count
@@ -931,9 +962,50 @@ func (e *Engine) UpdateRetryPolicy(ruleID string, count, waitSeconds int) error 
 	return nil
 }
 
-func (e *Engine) Rules() []config.Rule {
-	out := make([]config.Rule, 0, len(e.cfg.Rules))
+func (e *Engine) SaveJobDefinition(r config.Rule) error {
+	if err := config.NormalizeRule(&r, 0); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	if err := e.db.SetMeta("jobdef:"+r.ID, string(raw)); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	e.upsertRuleLocked(r)
+	e.retryPolicies[r.ID] = RetryPolicy{RetryCount: r.RetryLimit(), RetryWaitSeconds: int(r.RetryWait() / time.Second)}
+	e.mu.Unlock()
+	return nil
+}
+
+func (e *Engine) DeleteJobDefinition(id string) error {
 	for _, base := range e.cfg.Rules {
+		if base.ID == id {
+			return fmt.Errorf("job %q comes from config.json; disable or edit it instead of deleting it", id)
+		}
+	}
+	if err := e.db.DeleteMeta("jobdef:" + id); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := e.rules[:0]
+	for _, r := range e.rules {
+		if r.ID != id {
+			out = append(out, r)
+		}
+	}
+	e.rules = out
+	delete(e.retryPolicies, id)
+	return nil
+}
+
+func (e *Engine) Rules() []config.Rule {
+	rules := e.rulesSnapshot()
+	out := make([]config.Rule, 0, len(rules))
+	for _, base := range rules {
 		r, _ := e.rule(base.ID)
 		if r.RTorrent != nil {
 			cp := *r.RTorrent
@@ -944,4 +1016,25 @@ func (e *Engine) Rules() []config.Rule {
 	}
 	return out
 }
+
+func (e *Engine) Remotes(ctx context.Context) ([]rc.RemoteInfo, error) {
+	return e.rc.ListRemotes(ctx)
+}
+
+func (e *Engine) RemoteProviders(ctx context.Context) (json.RawMessage, error) {
+	return e.rc.Providers(ctx)
+}
+
+func (e *Engine) CreateRemote(ctx context.Context, name, typ string, params map[string]string) (*rc.ConfigQuestion, error) {
+	return e.rc.CreateRemote(ctx, name, typ, params)
+}
+
+func (e *Engine) UpdateRemote(ctx context.Context, name string, params map[string]string) (*rc.ConfigQuestion, error) {
+	return e.rc.UpdateRemote(ctx, name, params)
+}
+
+func (e *Engine) DeleteRemote(ctx context.Context, name string) error {
+	return e.rc.DeleteRemote(ctx, name)
+}
+
 func (e *Engine) DB() *db.DB { return e.db }
