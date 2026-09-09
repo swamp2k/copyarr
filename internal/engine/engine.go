@@ -34,6 +34,8 @@ type ActiveTransfer struct {
 	SpeedBps         float64 `json:"speed_bps"`
 	ETASeconds       *int64  `json:"eta_seconds,omitempty"`
 	StartedAt        string  `json:"started_at"`
+	AttemptNumber     int     `json:"attempt_number"`
+	MaxAttempts       int     `json:"max_attempts"`
 }
 
 type RuleScanStatus struct {
@@ -44,6 +46,12 @@ type RuleScanStatus struct {
 	SourceObjects       int     `json:"source_objects"`
 	RTorrentParsed      int     `json:"rtorrent_parsed"`
 	RTorrentComplete    int     `json:"rtorrent_complete"`
+}
+
+type JobView struct {
+	db.Job
+	AttemptNumber int `json:"attempt_number"`
+	MaxAttempts   int `json:"max_attempts"`
 }
 
 type Status struct {
@@ -66,8 +74,10 @@ type Engine struct {
 	wake       chan struct{}
 	mu         sync.Mutex
 	scanning   bool
-	active     *ActiveTransfer
-	ruleScans  map[string]RuleScanStatus
+	active         *ActiveTransfer
+	activeCancel   context.CancelFunc
+	controlActions map[int64]string
+	ruleScans      map[string]RuleScanStatus
 }
 
 type seenItem struct {
@@ -89,7 +99,8 @@ func New(cfg config.Config, d *db.DB, version, revision string) *Engine {
 		version:   version,
 		revision:  revision,
 		wake:      make(chan struct{}, 1),
-		ruleScans: make(map[string]RuleScanStatus),
+		ruleScans:      make(map[string]RuleScanStatus),
+		controlActions: make(map[int64]string),
 	}
 }
 
@@ -387,6 +398,13 @@ func (e *Engine) worker(ctx context.Context) {
 			return
 		default:
 		}
+
+		if err := e.db.PromoteDueRetries(); err != nil {
+			slog.Error("retry scheduler failed", "err", err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
 		job, err := e.db.NextQueuedJob()
 		if db.IsNoRows(err) {
 			time.Sleep(2 * time.Second)
@@ -397,19 +415,60 @@ func (e *Engine) worker(ctx context.Context) {
 			time.Sleep(2 * time.Second)
 			continue
 		}
+
 		r, ok := e.rule(job.RuleID)
 		if !ok {
-			_ = e.db.FailJob(job.ID, "rule no longer exists")
+			_ = e.db.FailJob(job.ID, "rule no longer exists", nil)
 			continue
 		}
 		items, err := e.db.JobItems(job.ID)
 		if err != nil {
-			_ = e.db.FailJob(job.ID, err.Error())
+			_ = e.db.FailJob(job.ID, err.Error(), nil)
 			continue
 		}
-		if err := e.transferJob(ctx, r, job, items); err != nil {
-			slog.Error("transfer failed", "job", job.ID, "name", job.DisplayName, "err", err)
-			_ = e.db.FailJob(job.ID, err.Error())
+
+		err = e.transferJob(ctx, r, job, items)
+		if err == nil {
+			e.discardControlAction(job.ID)
+			continue
+		}
+
+		if action := e.consumeControlAction(job.ID); action != "" {
+			switch action {
+			case "pause":
+				if stateErr := e.db.PauseJob(job.ID); stateErr != nil {
+					slog.Error("pause state update failed", "job", job.ID, "err", stateErr)
+				} else {
+					slog.Info("job paused", "job", job.ID, "name", job.DisplayName)
+				}
+			case "cancel":
+				if stateErr := e.db.CancelJob(job.ID); stateErr != nil {
+					slog.Error("cancel state update failed", "job", job.ID, "err", stateErr)
+				} else {
+					if cleanupErr := e.cleanupJobStage(context.Background(), r, job.ID); cleanupErr != nil {
+						slog.Warn("cancelled job staging cleanup failed", "job", job.ID, "err", cleanupErr)
+					}
+					slog.Info("job cancelled", "job", job.ID, "name", job.DisplayName)
+				}
+			}
+			continue
+		}
+
+		attempt := job.Attempts + 1
+		slog.Error("transfer failed", "job", job.ID, "name", job.DisplayName, "attempt", attempt, "max_attempts", r.RetryCount+1, "err", err)
+		if attempt <= r.RetryCount {
+			retryAt := time.Now().UTC().Add(time.Duration(r.RetryWaitSeconds) * time.Second)
+			if dbErr := e.db.FailJob(job.ID, err.Error(), &retryAt); dbErr != nil {
+				slog.Error("schedule retry failed", "job", job.ID, "err", dbErr)
+			} else {
+				slog.Info("job retry scheduled", "job", job.ID, "retry_at", retryAt.Format(time.RFC3339), "next_attempt", attempt+1, "max_attempts", r.RetryCount+1)
+			}
+		} else {
+			if dbErr := e.db.FailJob(job.ID, err.Error(), nil); dbErr != nil {
+				slog.Error("mark job failed failed", "job", job.ID, "err", dbErr)
+			} else {
+				slog.Error("job retries exhausted", "job", job.ID, "attempts", attempt, "max_attempts", r.RetryCount+1)
+			}
 		}
 	}
 }
@@ -437,14 +496,16 @@ func (e *Engine) transferJob(ctx context.Context, r config.Rule, job db.Job, ite
 		}
 	}
 
-	e.beginActive(job, r)
+	transferCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	e.beginActive(job, r, cancel)
 	defer e.clearActive(job.ID)
 
 	slog.Info("copying job", "job", job.ID, "kind", job.Kind, "name", job.DisplayName, "source", src, "stage", stage, "items", len(items), "bytes", job.TotalBytes, "verification", r.Verification, "multi_thread_streams", r.MultiThreadStreams)
 	var usedMT bool
 	if isDir {
 		var err error
-		usedMT, err = e.rc.CopyDirWithMultiThreadFallback(ctx, src, stage, r.RcloneArgs, r.MultiThreadStreams, r.MultiThreadCutoff, func(p rc.Progress) {
+		usedMT, err = e.rc.CopyDirWithMultiThreadFallback(transferCtx, src, stage, r.RcloneArgs, r.MultiThreadStreams, r.MultiThreadCutoff, func(p rc.Progress) {
 			e.updateRcloneProgress(job.ID, p)
 		})
 		if err != nil {
@@ -452,7 +513,7 @@ func (e *Engine) transferJob(ctx context.Context, r config.Rule, job db.Job, ite
 		}
 	} else {
 		var err error
-		usedMT, err = e.rc.CopyToWithMultiThreadFallback(ctx, src, stage, r.RcloneArgs, r.MultiThreadStreams, r.MultiThreadCutoff, func(p rc.Progress) {
+		usedMT, err = e.rc.CopyToWithMultiThreadFallback(transferCtx, src, stage, r.RcloneArgs, r.MultiThreadStreams, r.MultiThreadCutoff, func(p rc.Progress) {
 			e.updateRcloneProgress(job.ID, p)
 		})
 		if err != nil {
@@ -464,19 +525,19 @@ func (e *Engine) transferJob(ctx context.Context, r config.Rule, job db.Job, ite
 
 	if r.Verification == "size" {
 		e.setPhase(job.ID, "verifying_staging")
-		if err := e.verifyManifest(ctx, stage, job.RelRoot, items, isDir); err != nil {
+		if err := e.verifyManifest(transferCtx, stage, job.RelRoot, items, isDir); err != nil {
 			return fmt.Errorf("verify staging: %w", err)
 		}
 	}
 
 	e.setPhase(job.ID, "committing")
-	if err := e.rc.MoveTo(ctx, stage, final); err != nil {
+	if err := e.rc.MoveTo(transferCtx, stage, final); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
 
 	if r.Verification == "size" {
 		e.setPhase(job.ID, "verifying_final")
-		if err := e.verifyManifest(ctx, final, job.RelRoot, items, isDir); err != nil {
+		if err := e.verifyManifest(transferCtx, final, job.RelRoot, items, isDir); err != nil {
 			return fmt.Errorf("verify committed: %w", err)
 		}
 	}
@@ -488,10 +549,10 @@ func (e *Engine) transferJob(ctx context.Context, r config.Rule, job db.Job, ite
 	}
 	if r.Mode == "move" {
 		if isDir {
-			if err := e.rc.Purge(ctx, src); err != nil {
+			if err := e.rc.Purge(transferCtx, src); err != nil {
 				return fmt.Errorf("destination committed but source purge failed: %w", err)
 			}
-		} else if err := e.rc.DeleteFile(ctx, src); err != nil {
+		} else if err := e.rc.DeleteFile(transferCtx, src); err != nil {
 			return fmt.Errorf("destination committed but source delete failed: %w", err)
 		}
 	}
@@ -543,7 +604,7 @@ func (e *Engine) verifyManifest(ctx context.Context, target, relRoot string, exp
 	return nil
 }
 
-func (e *Engine) beginActive(job db.Job, r config.Rule) {
+func (e *Engine) beginActive(job db.Job, r config.Rule, cancel context.CancelFunc) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -551,7 +612,9 @@ func (e *Engine) beginActive(job db.Job, r config.Rule) {
 		JobID: job.ID, RuleID: job.RuleID, Name: job.DisplayName, Kind: job.Kind,
 		Path: job.RelRoot, Phase: "transferring", Verification: r.Verification,
 		MultiThread: r.MultiThreadStreams > 1, TotalBytes: job.TotalBytes, StartedAt: now,
+		AttemptNumber: job.Attempts + 1, MaxAttempts: r.RetryCount + 1,
 	}
+	e.activeCancel = cancel
 }
 
 func (e *Engine) setPhase(jobID int64, phase string) {
@@ -611,7 +674,104 @@ func (e *Engine) clearActive(jobID int64) {
 	defer e.mu.Unlock()
 	if e.active != nil && e.active.JobID == jobID {
 		e.active = nil
+		e.activeCancel = nil
 	}
+}
+
+func (e *Engine) ControlJob(jobID int64, action string) error {
+	e.mu.Lock()
+	if e.active != nil && e.active.JobID == jobID {
+		if action != "pause" && action != "cancel" {
+			e.mu.Unlock()
+			return fmt.Errorf("active job %d only supports pause or cancel", jobID)
+		}
+		if e.active.Phase != "transferring" {
+			phase := e.active.Phase
+			e.mu.Unlock()
+			return fmt.Errorf("job %d cannot be %sd during phase %s", jobID, action, phase)
+		}
+		e.controlActions[jobID] = action
+		cancel := e.activeCancel
+		e.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		return nil
+	}
+	e.mu.Unlock()
+
+	switch action {
+	case "retry":
+		return e.db.RetryJob(jobID)
+	case "resume":
+		return e.db.RequeueJob(jobID)
+	case "pause":
+		return e.db.PauseJob(jobID)
+	case "cancel":
+		if err := e.db.CancelJob(jobID); err != nil {
+			return err
+		}
+		if j, ok := e.jobByID(jobID); ok {
+			if r, found := e.rule(j.RuleID); found {
+				_ = e.cleanupJobStage(context.Background(), r, jobID)
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported job action %q", action)
+	}
+}
+
+func (e *Engine) consumeControlAction(jobID int64) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	action := e.controlActions[jobID]
+	delete(e.controlActions, jobID)
+	return action
+}
+
+func (e *Engine) discardControlAction(jobID int64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.controlActions, jobID)
+}
+
+func (e *Engine) cleanupJobStage(ctx context.Context, r config.Rule, jobID int64) error {
+	stageRootRel := path.Join(".copyarr-staging", strconv.FormatInt(jobID, 10))
+	return e.rc.PurgeIfExists(ctx, rc.Target(r.Destination, stageRootRel))
+}
+
+func (e *Engine) jobByID(jobID int64) (db.Job, bool) {
+	jobs, err := e.db.ListJobs(1000)
+	if err != nil {
+		return db.Job{}, false
+	}
+	for _, j := range jobs {
+		if j.ID == jobID {
+			return j, true
+		}
+	}
+	return db.Job{}, false
+}
+
+func (e *Engine) Jobs(limit int) ([]JobView, error) {
+	jobs, err := e.db.ListJobs(limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]JobView, 0, len(jobs))
+	for _, j := range jobs {
+		maxAttempts := 1
+		if r, ok := e.rule(j.RuleID); ok {
+			maxAttempts = r.RetryCount + 1
+		}
+		attempt := j.Attempts
+		if j.State == "queued" && attempt == 0 {
+			attempt = 1
+		}
+		out = append(out, JobView{Job: j, AttemptNumber: attempt, MaxAttempts: maxAttempts})
+	}
+	return out, nil
 }
 
 func (e *Engine) Status() (Status, error) {
@@ -716,5 +876,16 @@ func (e *Engine) rule(id string) (config.Rule, bool) {
 	return config.Rule{}, false
 }
 
-func (e *Engine) Rules() []config.Rule { return e.cfg.Rules }
-func (e *Engine) DB() *db.DB           { return e.db }
+func (e *Engine) Rules() []config.Rule {
+	out := make([]config.Rule, len(e.cfg.Rules))
+	copy(out, e.cfg.Rules)
+	for i := range out {
+		if out[i].RTorrent != nil {
+			cp := *out[i].RTorrent
+			cp.Password = ""
+			out[i].RTorrent = &cp
+		}
+	}
+	return out
+}
+func (e *Engine) DB() *db.DB { return e.db }
