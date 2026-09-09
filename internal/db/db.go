@@ -62,6 +62,27 @@ type QueueStats struct {
 	Bytes int64 `json:"bytes"`
 }
 
+type LogEntry struct {
+	ID         int64  `json:"id"`
+	Timestamp  string `json:"timestamp"`
+	Level      string `json:"level"`
+	Source     string `json:"source"`
+	Message    string `json:"message"`
+	JobID      *int64 `json:"job_id,omitempty"`
+	FieldsJSON string `json:"fields_json,omitempty"`
+}
+
+type JobStat struct {
+	ID               int64   `json:"id"`
+	JobID            int64   `json:"job_id"`
+	Timestamp        string  `json:"timestamp"`
+	Phase            string  `json:"phase"`
+	TransferredBytes int64   `json:"transferred_bytes"`
+	TotalBytes       int64   `json:"total_bytes"`
+	SpeedBps         float64 `json:"speed_bps"`
+	ETASeconds       *int64  `json:"eta_seconds,omitempty"`
+}
+
 func Open(path string) (*DB, error) {
 	s, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -137,6 +158,30 @@ CREATE TABLE IF NOT EXISTS job_items(
  FOREIGN KEY(object_id) REFERENCES objects(id)
 );
 CREATE INDEX IF NOT EXISTS idx_job_items_object ON job_items(object_id);
+
+CREATE TABLE IF NOT EXISTS logs(
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ ts TEXT NOT NULL,
+ level TEXT NOT NULL,
+ source TEXT NOT NULL,
+ message TEXT NOT NULL,
+ job_id INTEGER,
+ fields_json TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(id DESC);
+CREATE INDEX IF NOT EXISTS idx_logs_job ON logs(job_id,id DESC);
+
+CREATE TABLE IF NOT EXISTS job_stats(
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ job_id INTEGER NOT NULL,
+ ts TEXT NOT NULL,
+ phase TEXT NOT NULL DEFAULT '',
+ transferred_bytes INTEGER NOT NULL DEFAULT 0,
+ total_bytes INTEGER NOT NULL DEFAULT 0,
+ speed_bps REAL NOT NULL DEFAULT 0,
+ eta_seconds INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_job_stats_job ON job_stats(job_id,id);
 `)
 	if err != nil {
 		return err
@@ -599,6 +644,82 @@ FROM jobs ORDER BY id DESC LIMIT ?`, limit)
 			return nil, err
 		}
 		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) GetJob(id int64) (Job, error) {
+	var j Job
+	err := d.QueryRow(`SELECT id,rule_id,job_key,kind,display_name,rel_root,state,reason,total_bytes,item_count,attempts,last_error,created_at,started_at,completed_at,dest_path,next_retry_at
+FROM jobs WHERE id=?`, id).Scan(
+		&j.ID, &j.RuleID, &j.JobKey, &j.Kind, &j.DisplayName, &j.RelRoot, &j.State, &j.Reason,
+		&j.TotalBytes, &j.ItemCount, &j.Attempts, &j.LastError, &j.CreatedAt, &j.StartedAt, &j.CompletedAt, &j.DestPath, &j.NextRetryAt,
+	)
+	return j, err
+}
+
+func (d *DB) AddLog(level, source, message string, jobID *int64, fieldsJSON string) error {
+	_, err := d.Exec(`INSERT INTO logs(ts,level,source,message,job_id,fields_json) VALUES(?,?,?,?,?,?)`,
+		now(), level, source, message, jobID, fieldsJSON)
+	return err
+}
+
+func (d *DB) ListLogs(limit int, jobID *int64) ([]LogEntry, error) {
+	if limit <= 0 || limit > 5000 {
+		limit = 500
+	}
+	query := `SELECT id,ts,level,source,message,job_id,fields_json FROM logs`
+	args := []any{}
+	if jobID != nil {
+		query += ` WHERE job_id=?`
+		args = append(args, *jobID)
+	}
+	query += ` ORDER BY id DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := d.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]LogEntry, 0)
+	for rows.Next() {
+		var x LogEntry
+		if err := rows.Scan(&x.ID, &x.Timestamp, &x.Level, &x.Source, &x.Message, &x.JobID, &x.FieldsJSON); err != nil {
+			return nil, err
+		}
+		out = append(out, x)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) ClearLogs() error {
+	_, err := d.Exec(`DELETE FROM logs`)
+	return err
+}
+
+func (d *DB) AddJobStat(jobID int64, phase string, transferred, total int64, speed float64, eta *int64) error {
+	_, err := d.Exec(`INSERT INTO job_stats(job_id,ts,phase,transferred_bytes,total_bytes,speed_bps,eta_seconds)
+VALUES(?,?,?,?,?,?,?)`, jobID, now(), phase, transferred, total, speed, eta)
+	return err
+}
+
+func (d *DB) ListJobStats(jobID int64, limit int) ([]JobStat, error) {
+	if limit <= 0 || limit > 10000 {
+		limit = 2000
+	}
+	rows, err := d.Query(`SELECT id,job_id,ts,phase,transferred_bytes,total_bytes,speed_bps,eta_seconds
+FROM job_stats WHERE job_id=? ORDER BY id ASC LIMIT ?`, jobID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]JobStat, 0)
+	for rows.Next() {
+		var x JobStat
+		if err := rows.Scan(&x.ID, &x.JobID, &x.Timestamp, &x.Phase, &x.TransferredBytes, &x.TotalBytes, &x.SpeedBps, &x.ETASeconds); err != nil {
+			return nil, err
+		}
+		out = append(out, x)
 	}
 	return out, rows.Err()
 }
