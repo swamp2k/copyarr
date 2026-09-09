@@ -17,7 +17,9 @@ LABEL org.opencontainers.image.title="Copyarr" \
       org.opencontainers.image.description="Persistent copy/move queue for Unraid and rclone-backed transfers" \
       org.opencontainers.image.source="https://github.com/swamp2k/copyarr" \
       org.opencontainers.image.version="$VERSION" \
-      org.opencontainers.image.revision="$REVISION"
+      org.opencontainers.image.revision="$REVISION" \
+      net.unraid.docker.webui="http://[IP]:[PORT:8686]/" \
+      net.unraid.docker.shell="sh"
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
 COPY --from=build /out/copyarr /usr/local/bin/copyarr
