@@ -19,7 +19,7 @@ Copyarr is a small persistent transfer queue for automated copy/move jobs. It is
 
 ## Current status
 
-The transfer engine uses persistent jobs and intentionally runs one transfer at a time for predictable seedbox behaviour. Copyarr now includes bounded automatic retries, persisted retry scheduling, job controls, and a small built-in Unraid-friendly dashboard. Retry count/wait can be changed at runtime and are persisted as SQLite overrides; broader dynamic rule editing, Nexus registration and checksums remain later iterations.
+The transfer engine uses persistent jobs and intentionally runs one transfer at a time for predictable seedbox behaviour. Copyarr now includes bounded automatic retries, persisted retry scheduling, job controls, UI-managed job definitions and rclone remotes, include/exclude filtering, per-execution stats/logs, a raw application log and a small built-in Unraid-friendly dashboard. Nexus registration, accounts/auth and checksums remain later iterations.
 
 ## Quick start
 
@@ -38,6 +38,19 @@ The example mounts:
 - `/mnt/user/appdata/copyarr-data/config` → `/config`
 - `/mnt/user/media/downloads` → `/downloads`
 
+## Include / exclude filters
+
+Jobs may define `includes` and `excludes` as glob patterns. Include rules have priority over excludes, so a broad exclusion can be used as a deny-by-default rule while selected files are rescued by includes. For example:
+
+```json
+"includes": ["*.mkv"],
+"excludes": ["**"]
+```
+
+copies MKV files while excluding everything else. Patterns without a slash, such as `*.mkv`, match filenames at any depth. `**` spans directories.
+
+For filtered `move` jobs, Copyarr deletes only the files that were actually selected and committed; excluded files are never removed with the source directory.
+
 ## rTorrent
 
 Copyarr talks to an HTTP XML-RPC endpoint such as `/RPC2`. Do not expose raw rTorrent SCGI publicly; rTorrent expects access control to be provided by the web server/reverse proxy in front of it.
@@ -52,6 +65,11 @@ When enabled, Copyarr calls `d.multicall2` for hash, name, completion state and 
 - `GET /api/rules`
 - `PATCH /api/rules/{id}` — update `retry_count` and/or `retry_wait_seconds`; persisted in SQLite.
 - `GET /api/jobs?limit=100`
+- `GET /api/jobs/{id}` — execution details, file manifest, persisted progress samples and job-scoped logs.
+- `GET /api/logs?limit=500[&job_id=ID]`
+- `DELETE /api/logs`
+- `GET /api/settings`
+- `PATCH /api/settings` — currently supports `logging_enabled`.
 - `GET /api/objects?limit=200`
 - `POST /api/scan`
 - `POST /api/jobs/{id}/retry`
