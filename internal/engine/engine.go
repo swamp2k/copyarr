@@ -966,6 +966,15 @@ func (e *Engine) SaveJobDefinition(r config.Rule) error {
 	if err := config.NormalizeRule(&r, 0); err != nil {
 		return err
 	}
+	// Rules() redacts the rTorrent password, so a definition edited in the UI
+	// comes back with it blank. Keep the stored one unless a new one was typed.
+	if r.RTorrent != nil && r.RTorrent.Password == "" {
+		if existing, ok := e.rule(r.ID); ok && existing.RTorrent != nil && existing.RTorrent.Password != "" {
+			cp := *r.RTorrent
+			cp.Password = existing.RTorrent.Password
+			r.RTorrent = &cp
+		}
+	}
 	raw, err := json.Marshal(r)
 	if err != nil {
 		return err
