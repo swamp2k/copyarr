@@ -6,8 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-		"os/exec"
+	"os"
+	"os/exec"
 	"path"
+	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -47,9 +51,15 @@ func Target(e config.Endpoint, rel string) string {
 }
 
 func (c Client) run(ctx context.Context, args ...string) ([]byte, error) {
+	return c.runWith(ctx, c.ConfigPath, args...)
+}
+
+// runWith is run() against an explicit config file, so probes can execute
+// against a throwaway config without touching the live one.
+func (c Client) runWith(ctx context.Context, configPath string, args ...string) ([]byte, error) {
 	base := []string{}
-	if c.ConfigPath != "" {
-		base = append(base, "--config", c.ConfigPath)
+	if configPath != "" {
+		base = append(base, "--config", configPath)
 	}
 	cmd := exec.CommandContext(ctx, "rclone", append(base, args...)...)
 	var stderr bytes.Buffer
@@ -376,4 +386,166 @@ func (c Client) Stat(ctx context.Context, target string) (Item, error) {
 		return Item{}, err
 	}
 	return item, nil
+}
+
+// probeRemoteName is the throwaway remote name used when validating a remote
+// definition that has not been saved to the live config yet.
+const probeRemoteName = "copyarr_probe"
+
+// TestResult reports whether a remote answered a listing request.
+type TestResult struct {
+	OK      bool   `json:"ok"`
+	Message string `json:"message"`
+	Entries int    `json:"entries"`
+}
+
+// RemoteDetail is a saved remote's configuration with rclone's own redaction
+// applied, so an edit form can be prefilled without exposing secrets.
+type RemoteDetail struct {
+	Name       string            `json:"name"`
+	Type       string            `json:"type"`
+	Parameters map[string]string `json:"parameters"`
+	Redacted   []string          `json:"redacted"`
+}
+
+// rcloneLogPrefix matches the timestamp and severity rclone stamps on every log
+// line. It is deliberately unanchored: depending on whether stderr arrived as
+// its own line or folded into the wrapping "rclone %v: %w: %s" message, the
+// prefix can sit mid-string rather than at the start.
+var rcloneLogPrefix = regexp.MustCompile(`\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} (?:DEBUG|INFO|NOTICE|WARNING|ERROR|CRITICAL)\s*:\s*`)
+
+// summarizeError reduces rclone's multi-line stderr to the one line most
+// likely to explain the failure to a user.
+func summarizeError(err error) string {
+	var lines []string
+	for _, l := range strings.Split(err.Error(), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) == 0 {
+		return "rclone failed without any output"
+	}
+	pick := lines[len(lines)-1]
+	for _, l := range lines {
+		if strings.Contains(l, "Failed to") || strings.Contains(l, "ERROR") || strings.Contains(l, "CRITICAL") {
+			pick = l
+			break
+		}
+	}
+	if loc := rcloneLogPrefix.FindStringIndex(pick); loc != nil {
+		pick = pick[loc[1]:]
+	}
+	// The throwaway probe remote is an implementation detail; naming it in an
+	// error would only puzzle whoever is filling in the form.
+	pick = strings.ReplaceAll(pick, `"`+probeRemoteName+`:"`, "this remote")
+	pick = strings.TrimSpace(pick)
+	if len(pick) > 400 {
+		pick = pick[:400] + "..."
+	}
+	return pick
+}
+
+func remoteTarget(name, p string) string {
+	return name + ":" + strings.TrimSpace(p)
+}
+
+// probe lists one level of a target with retries disabled so a bad credential
+// or unreachable host reports back quickly instead of blocking the UI.
+func (c Client) probe(ctx context.Context, configPath, target string) TestResult {
+	out, err := c.runWith(ctx, configPath, "lsjson", target,
+		"--max-depth", "1",
+		"--retries", "1",
+		"--low-level-retries", "1",
+		"--timeout", "20s",
+		"--contimeout", "10s",
+	)
+	if err != nil {
+		return TestResult{Message: summarizeError(err)}
+	}
+	var items []Item
+	if json.Unmarshal(out, &items) != nil {
+		return TestResult{OK: true, Message: "Connected."}
+	}
+	noun := "entries"
+	if len(items) == 1 {
+		noun = "entry"
+	}
+	return TestResult{OK: true, Entries: len(items), Message: fmt.Sprintf("Connected - %d %s at this path.", len(items), noun)}
+}
+
+// TestRemote checks a remote that already exists in the live config.
+func (c Client) TestRemote(ctx context.Context, name, p string) TestResult {
+	return c.probe(ctx, c.ConfigPath, remoteTarget(name, p))
+}
+
+// TestConfig checks a remote definition that has not been saved yet by
+// materialising it in a throwaway config file and listing its root.
+func (c Client) TestConfig(ctx context.Context, typ string, params map[string]string, p string) (TestResult, error) {
+	dir, err := os.MkdirTemp("", "copyarr-probe-")
+	if err != nil {
+		return TestResult{}, err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	cfg := filepath.Join(dir, "rclone.conf")
+	if err := os.WriteFile(cfg, nil, 0o600); err != nil {
+		return TestResult{}, err
+	}
+
+	args := []string{"config", "create", probeRemoteName, typ, "--non-interactive", "--obscure"}
+	for _, k := range sortedKeys(params) {
+		args = append(args, k, params[k])
+	}
+	out, err := c.runWith(ctx, cfg, args...)
+	if err != nil {
+		return TestResult{Message: summarizeError(err)}, nil
+	}
+	var q ConfigQuestion
+	if json.Unmarshal(out, &q) == nil && q.State != "" {
+		return TestResult{Message: "This provider needs an interactive or OAuth step that Copyarr cannot complete yet."}, nil
+	}
+	return c.probe(ctx, cfg, remoteTarget(probeRemoteName, p)), nil
+}
+
+// RemoteConfig reads a saved remote back through rclone's redacting printer.
+// Redacted values come back as XXX, which are reported separately instead of
+// being handed to the caller as if they were real values.
+func (c Client) RemoteConfig(ctx context.Context, name string) (RemoteDetail, error) {
+	out, err := c.run(ctx, "config", "redacted", name)
+	if err != nil {
+		return RemoteDetail{}, err
+	}
+	detail := RemoteDetail{Name: name, Parameters: map[string]string{}}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "[") || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		switch {
+		case key == "type":
+			detail.Type = value
+		case value == "XXX":
+			detail.Redacted = append(detail.Redacted, key)
+		default:
+			detail.Parameters[key] = value
+		}
+	}
+	sort.Strings(detail.Redacted)
+	return detail, nil
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

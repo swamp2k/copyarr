@@ -1050,4 +1050,24 @@ func (e *Engine) DeleteRemote(ctx context.Context, name string) error {
 	return e.rc.DeleteRemote(ctx, name)
 }
 
+func (e *Engine) RemoteConfig(ctx context.Context, name string) (rc.RemoteDetail, error) {
+	return e.rc.RemoteConfig(ctx, name)
+}
+
+// remoteProbeTimeout bounds a connection test so a black-holed host cannot pin
+// an API request open indefinitely.
+const remoteProbeTimeout = 45 * time.Second
+
+func (e *Engine) TestRemote(ctx context.Context, name, remotePath string) rc.TestResult {
+	ctx, cancel := context.WithTimeout(ctx, remoteProbeTimeout)
+	defer cancel()
+	return e.rc.TestRemote(ctx, name, remotePath)
+}
+
+func (e *Engine) TestRemoteConfig(ctx context.Context, typ string, params map[string]string, remotePath string) (rc.TestResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, remoteProbeTimeout)
+	defer cancel()
+	return e.rc.TestConfig(ctx, typ, params, remotePath)
+}
+
 func (e *Engine) DB() *db.DB { return e.db }

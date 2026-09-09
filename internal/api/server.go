@@ -123,6 +123,42 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(raw)
 	})
+	mux.HandleFunc("GET /api/remotes/{name}", func(w http.ResponseWriter, r *http.Request) {
+		detail, err := s.eng.RemoteConfig(r.Context(), r.PathValue("name"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		write(w, detail)
+	})
+	mux.HandleFunc("POST /api/remotes/test", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Name       string            `json:"name"`
+			Type       string            `json:"type"`
+			Parameters map[string]string `json:"parameters"`
+			Path       string            `json:"path"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+		// A type means "check this draft before saving it"; a bare name means
+		// "check the remote that is already in the config".
+		if req.Type != "" {
+			result, err := s.eng.TestRemoteConfig(r.Context(), req.Type, req.Parameters, req.Path)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			write(w, result)
+			return
+		}
+		if req.Name == "" {
+			http.Error(w, "name or type is required", http.StatusBadRequest)
+			return
+		}
+		write(w, s.eng.TestRemote(r.Context(), req.Name, req.Path))
+	})
 	mux.HandleFunc("POST /api/remotes", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Name       string            `json:"name"`
