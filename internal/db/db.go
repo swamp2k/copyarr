@@ -500,7 +500,7 @@ func (d *DB) PauseJob(id int64) error {
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE jobs SET state='paused',updated_at=?,next_retry_at=NULL WHERE id=? AND state IN ('queued','retry_wait','copying')`, ts, id)
+	res, err := tx.Exec(`UPDATE jobs SET attempts=CASE WHEN state='copying' AND attempts>0 THEN attempts-1 ELSE attempts END,state='paused',updated_at=?,next_retry_at=NULL WHERE id=? AND state IN ('queued','retry_wait','copying')`, ts, id)
 	if err != nil {
 		return err
 	}
@@ -508,7 +508,7 @@ func (d *DB) PauseJob(id int64) error {
 	if n == 0 {
 		return fmt.Errorf("job %d cannot be paused in its current state", id)
 	}
-	if _, err = tx.Exec(`UPDATE objects SET state='paused' WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?) AND state IN ('queued','retry_wait','copying')`, id); err != nil {
+	if _, err = tx.Exec(`UPDATE objects SET attempts=CASE WHEN state='copying' AND attempts>0 THEN attempts-1 ELSE attempts END,state='paused' WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?) AND state IN ('queued','retry_wait','copying')`, id); err != nil {
 		return err
 	}
 	return tx.Commit()
