@@ -507,17 +507,18 @@ func (e *Engine) transferJob(ctx context.Context, r config.Rule, job db.Job, ite
 	stageRoot := rc.Target(r.Destination, stageRootRel)
 	stage := rc.Target(r.Destination, stageRel)
 
-	if job.Attempts > 0 {
-		slog.Info("cleaning stale staging before retry", "job", job.ID, "stage_root", stageRoot, "attempts", job.Attempts)
-		if err := e.rc.PurgeIfExists(ctx, stageRoot); err != nil {
-			return fmt.Errorf("clean stale staging: %w", err)
-		}
-	}
-
 	transferCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	e.beginActive(job, r, cancel)
 	defer e.clearActive(job.ID)
+
+	if job.Attempts > 0 {
+		slog.Info("cleaning stale staging before retry", "job", job.ID, "stage_root", stageRoot, "attempts", job.Attempts)
+		if err := e.rc.PurgeIfExists(transferCtx, stageRoot); err != nil {
+			return fmt.Errorf("clean stale staging: %w", err)
+		}
+	}
+	e.setPhase(job.ID, "transferring")
 
 	slog.Info("copying job", "job", job.ID, "kind", job.Kind, "name", job.DisplayName, "source", src, "stage", stage, "items", len(items), "bytes", job.TotalBytes, "verification", r.Verification, "multi_thread_streams", r.MultiThreadStreams)
 	var usedMT bool
@@ -628,7 +629,7 @@ func (e *Engine) beginActive(job db.Job, r config.Rule, cancel context.CancelFun
 	defer e.mu.Unlock()
 	e.active = &ActiveTransfer{
 		JobID: job.ID, RuleID: job.RuleID, Name: job.DisplayName, Kind: job.Kind,
-		Path: job.RelRoot, Phase: "transferring", Verification: r.Verification,
+		Path: job.RelRoot, Phase: "preparing", Verification: r.Verification,
 		MultiThread: r.MultiThreadStreams > 1, TotalBytes: job.TotalBytes, StartedAt: now,
 		AttemptNumber: job.Attempts + 1, MaxAttempts: r.RetryLimit() + 1,
 	}
