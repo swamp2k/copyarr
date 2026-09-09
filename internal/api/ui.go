@@ -730,6 +730,8 @@ var providers = null;
 var providersError = "";
 var editingDef = null;
 var wiz = null;
+var globalLogs = [];
+var executionDetail = null;
 
 /* Dashboard ---------------------------------------------------------------- */
 function badge(state){
@@ -769,7 +771,7 @@ function renderJobs(){
       : (j.last_error || "-");
     return "<tr>" +
       '<td class="dim num">' + j.id + "</td>" +
-      '<td><div class="cell-name" title="' + esc(j.display_name) + '">' + esc(j.display_name) + "</div></td>" +
+      '<td><div class="cell-name clickable" data-act="execution-open" data-id="' + j.id + '" title="Open transfer details">' + esc(j.display_name) + "</div></td>" +
       "<td>" + badge(j.state) + "</td>" +
       '<td class="num">' + esc(attempt) + "</td>" +
       '<td class="hide-sm num">' + bytes(j.total_bytes) + "</td>" +
@@ -886,6 +888,8 @@ function renderDefs(){
     ];
     if(d.cleanup_days) chips.push("Cleanup after " + d.cleanup_days + "d");
     if(d.rtorrent) chips.push("rTorrent gated");
+    if((d.includes || []).length) chips.push((d.includes || []).length + " include filter" + ((d.includes || []).length === 1 ? "" : "s"));
+    if((d.excludes || []).length) chips.push((d.excludes || []).length + " exclude filter" + ((d.excludes || []).length === 1 ? "" : "s"));
     return '<div class="entity">' +
       '<div class="entity-top">' +
         '<div style="min-width:0">' +
@@ -959,6 +963,8 @@ function setJobForm(d){
   $("defRetryWait").value = d.retry_wait_seconds == null ? 300 : d.retry_wait_seconds;
   $("defInitial").value = d.initial_behavior || "ignore_existing";
   $("defArgs").value = (d.rclone_args || []).join("\n");
+  $("defIncludes").value = (d.includes || []).join("\n");
+  $("defExcludes").value = (d.excludes || []).join("\n");
 
   var rt = d.rtorrent || null;
   $("defRtEnabled").checked = !!rt;
@@ -1031,6 +1037,8 @@ async function saveJob(){
     d.retry_wait_seconds = Number($("defRetryWait").value);
     d.initial_behavior = $("defInitial").value;
     d.rclone_args = $("defArgs").value.split("\n").map(function(x){ return x.trim(); }).filter(Boolean);
+    d.includes = $("defIncludes").value.split("\n").map(function(x){ return x.trim(); }).filter(Boolean);
+    d.excludes = $("defExcludes").value.split("\n").map(function(x){ return x.trim(); }).filter(Boolean);
 
     if($("defRtEnabled").checked){
       d.rtorrent = {
