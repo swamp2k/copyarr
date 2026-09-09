@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/swamp2k/copyarr/internal/config"
+	"github.com/swamp2k/copyarr/internal/db"
 	"github.com/swamp2k/copyarr/internal/engine"
 )
 
@@ -223,6 +224,67 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		write(w, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("GET /api/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			http.Error(w, "invalid job id", http.StatusBadRequest)
+			return
+		}
+		detail, err := s.eng.JobDetail(id)
+		if err != nil {
+			if db.IsNoRows(err) {
+				http.Error(w, "job not found", http.StatusNotFound)
+			} else {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
+		write(w, detail)
+	})
+	mux.HandleFunc("GET /api/logs", func(w http.ResponseWriter, r *http.Request) {
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		var jobID *int64
+		if raw := r.URL.Query().Get("job_id"); raw != "" {
+			id, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				http.Error(w, "invalid job_id", http.StatusBadRequest)
+				return
+			}
+			jobID = &id
+		}
+		items, err := s.eng.Logs(limit, jobID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		write(w, items)
+	})
+	mux.HandleFunc("DELETE /api/logs", func(w http.ResponseWriter, r *http.Request) {
+		if err := s.eng.ClearLogs(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		write(w, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("GET /api/settings", func(w http.ResponseWriter, r *http.Request) {
+		write(w, s.eng.Settings())
+	})
+	mux.HandleFunc("PATCH /api/settings", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			LoggingEnabled *bool `json:"logging_enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+		if req.LoggingEnabled != nil {
+			if err := s.eng.SetLoggingEnabled(*req.LoggingEnabled); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		write(w, s.eng.Settings())
 	})
 	mux.HandleFunc("GET /api/jobs", func(w http.ResponseWriter, r *http.Request) {
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
