@@ -28,6 +28,7 @@ type Object struct {
 	LastError   string  `json:"last_error"`
 	CompletedAt *string `json:"completed_at,omitempty"`
 	DestPath    string  `json:"dest_path"`
+	NextRetryAt *string `json:"next_retry_at,omitempty"`
 }
 
 type Job struct {
@@ -120,6 +121,7 @@ CREATE TABLE IF NOT EXISTS jobs(
  started_at TEXT,
  completed_at TEXT,
  dest_path TEXT NOT NULL DEFAULT '',
+ next_retry_at TEXT,
  UNIQUE(rule_id,job_key)
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state,id);
@@ -136,6 +138,31 @@ CREATE TABLE IF NOT EXISTS job_items(
 );
 CREATE INDEX IF NOT EXISTS idx_job_items_object ON job_items(object_id);
 `)
+	if err != nil {
+		return err
+	}
+	return d.ensureColumn("jobs", "next_retry_at", "TEXT")
+}
+
+func (d *DB) ensureColumn(table, column, decl string) error {
+	rows, err := d.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var def any
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &def, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	_, err = d.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + decl)
 	return err
 }
 
@@ -231,10 +258,10 @@ func (d *DB) SetStateByKey(rule, key, state, msg string) error {
 
 func (d *DB) CreateJob(rule, key, kind, displayName, relRoot, reason string, items []JobItem) (Job, bool, error) {
 	var j Job
-	err := d.QueryRow(`SELECT id,rule_id,job_key,kind,display_name,rel_root,state,reason,total_bytes,item_count,attempts,last_error,created_at,started_at,completed_at,dest_path
+	err := d.QueryRow(`SELECT id,rule_id,job_key,kind,display_name,rel_root,state,reason,total_bytes,item_count,attempts,last_error,created_at,started_at,completed_at,dest_path,next_retry_at
 FROM jobs WHERE rule_id=? AND job_key=?`, rule, key).Scan(
 		&j.ID, &j.RuleID, &j.JobKey, &j.Kind, &j.DisplayName, &j.RelRoot, &j.State, &j.Reason,
-		&j.TotalBytes, &j.ItemCount, &j.Attempts, &j.LastError, &j.CreatedAt, &j.StartedAt, &j.CompletedAt, &j.DestPath,
+		&j.TotalBytes, &j.ItemCount, &j.Attempts, &j.LastError, &j.CreatedAt, &j.StartedAt, &j.CompletedAt, &j.DestPath, &j.NextRetryAt,
 	)
 	if err == nil {
 		return j, false, nil
@@ -291,10 +318,10 @@ VALUES(?,?,?,?,?,'queued',?,?,?,?,?)`, rule, key, kind, displayName, relRoot, re
 
 func (d *DB) jobByKey(rule, key string) (Job, bool, error) {
 	var j Job
-	err := d.QueryRow(`SELECT id,rule_id,job_key,kind,display_name,rel_root,state,reason,total_bytes,item_count,attempts,last_error,created_at,started_at,completed_at,dest_path
+	err := d.QueryRow(`SELECT id,rule_id,job_key,kind,display_name,rel_root,state,reason,total_bytes,item_count,attempts,last_error,created_at,started_at,completed_at,dest_path,next_retry_at
 FROM jobs WHERE rule_id=? AND job_key=?`, rule, key).Scan(
 		&j.ID, &j.RuleID, &j.JobKey, &j.Kind, &j.DisplayName, &j.RelRoot, &j.State, &j.Reason,
-		&j.TotalBytes, &j.ItemCount, &j.Attempts, &j.LastError, &j.CreatedAt, &j.StartedAt, &j.CompletedAt, &j.DestPath,
+		&j.TotalBytes, &j.ItemCount, &j.Attempts, &j.LastError, &j.CreatedAt, &j.StartedAt, &j.CompletedAt, &j.DestPath, &j.NextRetryAt,
 	)
 	if err == sql.ErrNoRows {
 		return j, false, nil
@@ -304,10 +331,10 @@ FROM jobs WHERE rule_id=? AND job_key=?`, rule, key).Scan(
 
 func (d *DB) NextQueuedJob() (Job, error) {
 	var j Job
-	err := d.QueryRow(`SELECT id,rule_id,job_key,kind,display_name,rel_root,state,reason,total_bytes,item_count,attempts,last_error,created_at,started_at,completed_at,dest_path
+	err := d.QueryRow(`SELECT id,rule_id,job_key,kind,display_name,rel_root,state,reason,total_bytes,item_count,attempts,last_error,created_at,started_at,completed_at,dest_path,next_retry_at
 FROM jobs WHERE state='queued' ORDER BY id LIMIT 1`).Scan(
 		&j.ID, &j.RuleID, &j.JobKey, &j.Kind, &j.DisplayName, &j.RelRoot, &j.State, &j.Reason,
-		&j.TotalBytes, &j.ItemCount, &j.Attempts, &j.LastError, &j.CreatedAt, &j.StartedAt, &j.CompletedAt, &j.DestPath,
+		&j.TotalBytes, &j.ItemCount, &j.Attempts, &j.LastError, &j.CreatedAt, &j.StartedAt, &j.CompletedAt, &j.DestPath, &j.NextRetryAt,
 	)
 	return j, err
 }
@@ -336,7 +363,7 @@ func (d *DB) StartJob(id int64) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(`UPDATE jobs SET state='copying',attempts=attempts+1,started_at=?,updated_at=?,last_error='' WHERE id=?`, ts, ts, id); err != nil {
+	if _, err = tx.Exec(`UPDATE jobs SET state='copying',attempts=attempts+1,started_at=?,updated_at=?,last_error='',next_retry_at=NULL WHERE id=?`, ts, ts, id); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(`UPDATE objects SET state='copying',attempts=attempts+1,last_error='' WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?)`, id); err != nil {
@@ -353,22 +380,60 @@ func (d *DB) CompleteObject(id int64, dest string) error {
 
 func (d *DB) CompleteJob(id int64, dest string) error {
 	ts := now()
-	_, e := d.Exec(`UPDATE jobs SET state='done',completed_at=?,updated_at=?,dest_path=?,last_error='' WHERE id=?`, ts, ts, dest, id)
+	_, e := d.Exec(`UPDATE jobs SET state='done',completed_at=?,updated_at=?,dest_path=?,last_error='',next_retry_at=NULL WHERE id=?`, ts, ts, dest, id)
 	return e
 }
 
-func (d *DB) FailJob(id int64, msg string) error {
+func (d *DB) FailJob(id int64, msg string, retryAt *time.Time) error {
+	ts := now()
+	state := "failed"
+	var retryValue any
+	if retryAt != nil {
+		state = "retry_wait"
+		retryValue = retryAt.UTC().Format(time.RFC3339Nano)
+	}
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`UPDATE jobs SET state=?,last_error=?,updated_at=?,next_retry_at=? WHERE id=?`, state, msg, ts, retryValue, id); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`UPDATE objects SET state=?,last_error=? WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?)`, state, msg, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (d *DB) PromoteDueRetries() error {
 	ts := now()
 	tx, err := d.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(`UPDATE jobs SET state='retry_wait',last_error=?,updated_at=? WHERE id=?`, msg, ts, id); err != nil {
+	rows, err := tx.Query(`SELECT id FROM jobs WHERE state='retry_wait' AND next_retry_at IS NOT NULL AND next_retry_at<=?`, ts)
+	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(`UPDATE objects SET state='retry_wait',last_error=? WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?)`, msg, id); err != nil {
-		return err
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	for _, id := range ids {
+		if _, err = tx.Exec(`UPDATE jobs SET state='queued',updated_at=?,next_retry_at=NULL WHERE id=?`, ts, id); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`UPDATE objects SET state='queued' WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?) AND state='retry_wait'`, id); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -380,7 +445,7 @@ func (d *DB) RequeueJob(id int64) error {
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE jobs SET state='queued',updated_at=?,last_error='' WHERE id=? AND state IN ('retry_wait','paused')`, ts, id)
+	res, err := tx.Exec(`UPDATE jobs SET state='queued',updated_at=?,last_error='',next_retry_at=NULL WHERE id=? AND state IN ('retry_wait','paused','failed')`, ts, id)
 	if err != nil {
 		return err
 	}
@@ -388,7 +453,7 @@ func (d *DB) RequeueJob(id int64) error {
 	if n == 0 {
 		return fmt.Errorf("job %d is not retryable/resumable", id)
 	}
-	if _, err = tx.Exec(`UPDATE objects SET state='queued',last_error='' WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?) AND state IN ('retry_wait','paused')`, id); err != nil {
+	if _, err = tx.Exec(`UPDATE objects SET state='queued',last_error='' WHERE id IN (SELECT object_id FROM job_items WHERE job_id=?) AND state IN ('retry_wait','paused','failed')`, id); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -401,7 +466,7 @@ func (d *DB) PauseJob(id int64) error {
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE jobs SET state='paused',updated_at=? WHERE id=? AND state IN ('queued','retry_wait')`, ts, id)
+	res, err := tx.Exec(`UPDATE jobs SET state='paused',updated_at=?,next_retry_at=NULL WHERE id=? AND state IN ('queued','retry_wait')`, ts, id)
 	if err != nil {
 		return err
 	}
@@ -422,7 +487,7 @@ func (d *DB) CancelJob(id int64) error {
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE jobs SET state='cancelled',updated_at=? WHERE id=? AND state IN ('queued','retry_wait','paused')`, ts, id)
+	res, err := tx.Exec(`UPDATE jobs SET state='cancelled',updated_at=?,next_retry_at=NULL WHERE id=? AND state IN ('queued','retry_wait','paused')`, ts, id)
 	if err != nil {
 		return err
 	}
@@ -464,7 +529,7 @@ func (d *DB) ListJobs(limit int) ([]Job, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := d.Query(`SELECT id,rule_id,job_key,kind,display_name,rel_root,state,reason,total_bytes,item_count,attempts,last_error,created_at,started_at,completed_at,dest_path
+	rows, err := d.Query(`SELECT id,rule_id,job_key,kind,display_name,rel_root,state,reason,total_bytes,item_count,attempts,last_error,created_at,started_at,completed_at,dest_path,next_retry_at
 FROM jobs ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -474,7 +539,7 @@ FROM jobs ORDER BY id DESC LIMIT ?`, limit)
 	for rows.Next() {
 		var j Job
 		if err := rows.Scan(&j.ID, &j.RuleID, &j.JobKey, &j.Kind, &j.DisplayName, &j.RelRoot, &j.State, &j.Reason,
-			&j.TotalBytes, &j.ItemCount, &j.Attempts, &j.LastError, &j.CreatedAt, &j.StartedAt, &j.CompletedAt, &j.DestPath); err != nil {
+			&j.TotalBytes, &j.ItemCount, &j.Attempts, &j.LastError, &j.CreatedAt, &j.StartedAt, &j.CompletedAt, &j.DestPath, &j.NextRetryAt); err != nil {
 			return nil, err
 		}
 		out = append(out, j)
