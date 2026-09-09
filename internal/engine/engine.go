@@ -784,8 +784,8 @@ func (e *Engine) Jobs(limit int) ([]JobView, error) {
 			maxAttempts = r.RetryLimit() + 1
 		}
 		attempt := j.Attempts
-		if j.State == "queued" && attempt == 0 {
-			attempt = 1
+		if j.State == "queued" {
+			attempt = j.Attempts + 1
 		}
 		out = append(out, JobView{Job: j, AttemptNumber: attempt, MaxAttempts: maxAttempts})
 	}
