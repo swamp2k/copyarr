@@ -312,7 +312,7 @@ func (c Client) CopyDirWithMultiThreadFallback(ctx context.Context, src, dst str
 			withMT = append(withMT, "--multi-thread-cutoff", cutoff)
 		}
 	}
-	err := c.runCopy(ctx, withMT, progress)
+	err := c.runCopy(ctx, withMT, progress, rawLog)
 	if err == nil || streams <= 1 {
 		return streams > 1, err
 	}
@@ -320,7 +320,7 @@ func (c Client) CopyDirWithMultiThreadFallback(ctx context.Context, src, dst str
 		return true, err
 	}
 	fallback := append([]string{"copy", src, dst, "--partial-suffix", ".copyarr-part"}, extra...)
-	return false, c.runCopy(ctx, fallback, progress)
+	return false, c.runCopy(ctx, fallback, progress, rawLog)
 }
 
 func isMultiThreadUnsupported(err error) bool {
