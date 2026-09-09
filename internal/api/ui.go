@@ -389,7 +389,7 @@ details.adv>div{padding:6px 0 16px}
         <h3>Persistent logging</h3>
         <div class="dim" style="margin-top:4px">Store Copyarr events and raw rclone transfer output in SQLite for troubleshooting.</div>
       </div>
-      <label class="switch"><input id="settingLogging" type="checkbox" data-act="setting-logging"><span></span></label>
+      <label class="switch"><input id="settingLogging" type="checkbox"><span></span></label>
     </div>
     <div class="settings-row">
       <div>
@@ -1805,7 +1805,6 @@ document.addEventListener("click", function(ev){
   else if(act === "execution-tab") setExecutionTab(t.dataset.val, t);
   else if(act === "logs-refresh") refreshLogs();
   else if(act === "logs-clear") clearLogs();
-  else if(act === "setting-logging") setLogging(t.checked);
   else if(act === "job-ctl") controlJob(t.dataset.id, t.dataset.ctl);
   else if(act === "job-new") openJobModal(null);
   else if(act === "job-edit") openJobModal(t.dataset.id);
@@ -1907,6 +1906,7 @@ refresh();
 refreshRemotes(false);
 refreshSettings();
 $("logLevel").addEventListener("change", renderGlobalLogs);
+$("settingLogging").addEventListener("change", function(){ setLogging(this.checked); });
 setInterval(refresh, 2000);
 setInterval(function(){
   if(!$("page-logs").hidden) refreshLogs();
