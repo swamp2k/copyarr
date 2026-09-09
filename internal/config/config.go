@@ -42,8 +42,8 @@ type Rule struct {
 	Verification       string    `json:"verification"`
 	MultiThreadStreams int       `json:"multi_thread_streams"`
 	MultiThreadCutoff  string    `json:"multi_thread_cutoff"`
-	RetryCount          int       `json:"retry_count"`
-	RetryWaitSeconds    int       `json:"retry_wait_seconds"`
+	RetryCount          *int      `json:"retry_count"`
+	RetryWaitSeconds    *int      `json:"retry_wait_seconds"`
 	RTorrent           *RTorrent `json:"rtorrent,omitempty"`
 	RcloneArgs         []string  `json:"rclone_args,omitempty"`
 }
@@ -95,23 +95,39 @@ func Load(path string) (Config, error) {
 		if r.MultiThreadCutoff == "" {
 			r.MultiThreadCutoff = "256M"
 		}
-		if r.RetryCount < 0 {
+		if r.RetryCount == nil {
+			v := 3
+			r.RetryCount = &v
+		}
+		if *r.RetryCount < 0 {
 			return c, fmt.Errorf("rule %s has invalid retry_count", r.ID)
 		}
-		if r.RetryCount == 0 {
-			r.RetryCount = 3
+		if r.RetryWaitSeconds == nil {
+			v := 300
+			r.RetryWaitSeconds = &v
 		}
-		if r.RetryWaitSeconds < 0 {
+		if *r.RetryWaitSeconds < 0 {
 			return c, fmt.Errorf("rule %s has invalid retry_wait_seconds", r.ID)
-		}
-		if r.RetryWaitSeconds == 0 {
-			r.RetryWaitSeconds = 300
 		}
 		if r.RTorrent != nil && r.RTorrent.View == "" {
 			r.RTorrent.View = "main"
 		}
 	}
 	return c, nil
+}
+
+func (r Rule) RetryLimit() int {
+	if r.RetryCount == nil {
+		return 3
+	}
+	return *r.RetryCount
+}
+
+func (r Rule) RetryWait() time.Duration {
+	if r.RetryWaitSeconds == nil {
+		return 300 * time.Second
+	}
+	return time.Duration(*r.RetryWaitSeconds) * time.Second
 }
 
 func (c Config) ScanInterval() time.Duration {
