@@ -850,6 +850,155 @@ async function refresh(){
   await Promise.all([refreshStatus(), refreshJobs()]);
 }
 
+function renderLogLines(entries, host){
+  if(!entries || !entries.length){
+    host.innerHTML = '<div class="dim">No stored log entries.</div>';
+    return;
+  }
+  var ordered = entries.slice().reverse();
+  host.innerHTML = ordered.map(function(x){
+    var extra = "";
+    if(x.fields_json){
+      try{
+        var obj = JSON.parse(x.fields_json);
+        if(Object.keys(obj).length) extra = " " + JSON.stringify(obj);
+      }catch(e){ extra = " " + x.fields_json; }
+    }
+    return '<div class="log-line ' + esc(String(x.level || "").toUpperCase()) + '">' +
+      '<span class="ts">' + esc(new Date(x.timestamp).toLocaleString()) + '</span>' +
+      '<span class="lvl">' + esc(x.level || "") + '</span>' +
+      '<span class="src">' + esc(x.source || "") + '</span>' +
+      '<span class="msg">' + esc((x.message || "") + extra) + '</span></div>';
+  }).join("");
+  host.scrollTop = host.scrollHeight;
+}
+
+function renderGlobalLogs(){
+  var level = $("logLevel").value || "all";
+  var shown = globalLogs.filter(function(x){
+    return level === "all" || String(x.level || "").toUpperCase() === level;
+  });
+  $("logCount").textContent = shown.length + " shown of " + globalLogs.length + " loaded";
+  renderLogLines(shown, $("globalLog"));
+}
+
+async function refreshLogs(){
+  try{
+    globalLogs = await api("/api/logs?limit=1500");
+    renderGlobalLogs();
+  }catch(e){
+    $("globalLog").textContent = e.message;
+  }
+}
+
+async function clearLogs(){
+  var ok = await askConfirm({
+    title: "Clear stored logs?",
+    subtitle: "This does not change whether logging is enabled.",
+    body: '<div class="notice">All persisted application and rclone log lines will be deleted. Transfer history and stats are kept.</div>',
+    confirmLabel: "Clear logs",
+    danger: true
+  });
+  if(!ok) return;
+  try{
+    await api("/api/logs", { method: "DELETE" });
+    globalLogs = [];
+    renderGlobalLogs();
+    toast("Logs cleared");
+  }catch(e){ toast(e.message, true); }
+}
+
+async function refreshSettings(){
+  try{
+    var s = await api("/api/settings");
+    $("settingLogging").checked = !!s.logging_enabled;
+  }catch(e){ toast(e.message, true); }
+}
+
+async function setLogging(on){
+  try{
+    var s = await api("/api/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ logging_enabled: !!on })
+    });
+    $("settingLogging").checked = !!s.logging_enabled;
+    toast(s.logging_enabled ? "Logging enabled" : "Logging disabled");
+  }catch(e){
+    $("settingLogging").checked = !on;
+    toast(e.message, true);
+  }
+}
+
+function executionDuration(j){
+  if(!j.started_at) return "-";
+  var end = j.completed_at ? new Date(j.completed_at).getTime() : Date.now();
+  return dur(Math.max(0, (end - new Date(j.started_at).getTime()) / 1000));
+}
+
+function renderExecution(detail){
+  executionDetail = detail;
+  var j = detail.job || {};
+  var stats = detail.stats || [];
+  var peak = stats.reduce(function(m,x){ return Math.max(m, Number(x.speed_bps || 0)); }, 0);
+  var avg = 0;
+  if(j.started_at && j.completed_at){
+    var secs = (new Date(j.completed_at).getTime() - new Date(j.started_at).getTime()) / 1000;
+    if(secs > 0) avg = Number(j.total_bytes || 0) / secs;
+  }
+  $("executionTitle").textContent = j.display_name || ("Transfer #" + j.id);
+  $("executionSub").textContent = "#" + j.id + " · " + (j.rule_id || "") + " · " + (j.state || "");
+  $("executionStats").innerHTML =
+    '<div class="detail-stat"><span class="dim">Size</span><b>' + bytes(j.total_bytes) + '</b></div>' +
+    '<div class="detail-stat"><span class="dim">Duration</span><b>' + executionDuration(j) + '</b></div>' +
+    '<div class="detail-stat"><span class="dim">Average speed</span><b>' + (avg ? bytes(avg) + "/s" : "-") + '</b></div>' +
+    '<div class="detail-stat"><span class="dim">Peak speed</span><b>' + (peak ? bytes(peak) + "/s" : "-") + '</b></div>' +
+    '<div class="detail-stat"><span class="dim">Attempt</span><b>' + (j.attempt_number || j.attempts || 0) + "/" + (j.max_attempts || "?") + '</b></div>' +
+    '<div class="detail-stat"><span class="dim">Files</span><b>' + (j.item_count || (detail.items || []).length) + '</b></div>' +
+    '<div class="detail-stat"><span class="dim">Reason</span><b style="font-size:12px">' + esc(j.reason || "-") + '</b></div>' +
+    '<div class="detail-stat"><span class="dim">Destination</span><b style="font-size:12px" title="' + esc(j.dest_path || "") + '">' + esc(j.dest_path || "-") + '</b></div>';
+
+  var items = detail.items || [];
+  $("executionFiles").innerHTML = items.length
+    ? '<div class="file-list">' + items.map(function(x){
+        return '<div class="file-row"><span title="' + esc(x.rel_path) + '">' + esc(x.rel_path) + '</span><span class="num">' + bytes(x.size) + '</span></div>';
+      }).join("") + '</div>'
+    : '<div class="dim">No file manifest stored.</div>';
+  renderLogLines(detail.logs || [], $("executionLog"));
+}
+
+async function openExecution(id){
+  $("executionModal").hidden = false;
+  $("executionTitle").textContent = "Loading transfer...";
+  $("executionSub").textContent = "";
+  $("executionStats").innerHTML = "";
+  $("executionFiles").innerHTML = '<div class="notice busy">Loading execution details...</div>';
+  $("executionLog").innerHTML = "";
+  setExecutionTab("overview");
+  try{
+    renderExecution(await api("/api/jobs/" + encodeURIComponent(id)));
+  }catch(e){
+    $("executionFiles").innerHTML = '<div class="notice err">' + esc(e.message) + '</div>';
+  }
+}
+
+function closeExecution(){
+  $("executionModal").hidden = true;
+  executionDetail = null;
+}
+
+function setExecutionTab(name, btn){
+  $("executionFiles").hidden = name !== "overview";
+  $("executionLog").hidden = name !== "log";
+  Array.prototype.forEach.call(document.querySelectorAll('[data-act="execution-tab"]'), function(x){ x.classList.remove("active"); });
+  if(btn){
+    btn.classList.add("active");
+  }else{
+    var target = document.querySelector('[data-act="execution-tab"][data-val="' + name + '"]');
+    if(target) target.classList.add("active");
+  }
+}
+
 /* Job definitions ---------------------------------------------------------- */
 function endpointText(ep){
   var remote = ep && ep.remote ? ep.remote + ":" : "";
