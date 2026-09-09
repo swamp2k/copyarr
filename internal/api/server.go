@@ -18,6 +18,14 @@ func New(e *engine.Engine) *Server { return &Server{eng: e} }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(uiHTML))
+	})
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		write(w, map[string]any{"ok": true, "service": "copyarr"})
 	})
@@ -31,6 +39,36 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/rules", func(w http.ResponseWriter, r *http.Request) {
 		write(w, s.eng.Rules())
+	})
+	mux.HandleFunc("PATCH /api/rules/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		current, ok := s.eng.RetryPolicy(id)
+		if !ok {
+			http.Error(w, "rule not found", http.StatusNotFound)
+			return
+		}
+		var req struct {
+			RetryCount       *int `json:"retry_count"`
+			RetryWaitSeconds *int `json:"retry_wait_seconds"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+		count := current.RetryCount
+		wait := current.RetryWaitSeconds
+		if req.RetryCount != nil {
+			count = *req.RetryCount
+		}
+		if req.RetryWaitSeconds != nil {
+			wait = *req.RetryWaitSeconds
+		}
+		if err := s.eng.UpdateRetryPolicy(id, count, wait); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		policy, _ := s.eng.RetryPolicy(id)
+		write(w, policy)
 	})
 	mux.HandleFunc("GET /api/jobs", func(w http.ResponseWriter, r *http.Request) {
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
