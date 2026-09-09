@@ -149,18 +149,26 @@ func (d *DB) ensureColumn(table, column, decl string) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var cid int
 		var name, typ string
 		var notnull, pk int
 		var def any
 		if err := rows.Scan(&cid, &name, &typ, &notnull, &def, &pk); err != nil {
+			_ = rows.Close()
 			return err
 		}
 		if name == column {
+			_ = rows.Close()
 			return nil
 		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
 	}
 	_, err = d.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + decl)
 	return err
