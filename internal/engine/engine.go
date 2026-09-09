@@ -973,9 +973,13 @@ func (e *Engine) SaveJobDefinition(r config.Rule) error {
 	if err := e.db.SetMeta("jobdef:"+r.ID, string(raw)); err != nil {
 		return err
 	}
+	p := RetryPolicy{RetryCount: r.RetryLimit(), RetryWaitSeconds: int(r.RetryWait() / time.Second)}
+	if err := e.db.SetMeta("rule:"+r.ID+":retry_policy", fmt.Sprintf("%d,%d", p.RetryCount, p.RetryWaitSeconds)); err != nil {
+		return err
+	}
 	e.mu.Lock()
 	e.upsertRuleLocked(r)
-	e.retryPolicies[r.ID] = RetryPolicy{RetryCount: r.RetryLimit(), RetryWaitSeconds: int(r.RetryWait() / time.Second)}
+	e.retryPolicies[r.ID] = p
 	e.mu.Unlock()
 	return nil
 }
