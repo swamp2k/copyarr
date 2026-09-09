@@ -169,7 +169,7 @@ func TestLogsCanBeStoredFilteredAndCleared(t *testing.T) {
 	if err := d.AddLog("INFO", "copyarr", "global", nil, "{}"); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.AddLog("INFO", "rclone", "job line", &jobID, "{"x":1}"); err != nil {
+	if err := d.AddLog("INFO", "rclone", "job line", &jobID, "{\"x\":1}"); err != nil {
 		t.Fatal(err)
 	}
 	all, err := d.ListLogs(10, nil)
