@@ -269,6 +269,8 @@ details.adv>div{padding:6px 0 16px}
   <button class="tab active" data-act="page" data-val="dashboard">Dashboard</button>
   <button class="tab" data-act="page" data-val="jobs">Jobs</button>
   <button class="tab" data-act="page" data-val="remotes">Remotes</button>
+  <button class="tab" data-act="page" data-val="logs">Logs</button>
+  <button class="tab" data-act="page" data-val="settings">Settings</button>
 </nav>
 
 <!-- Dashboard --------------------------------------------------------------->
@@ -345,6 +347,58 @@ details.adv>div{padding:6px 0 16px}
     <button class="btn btn-primary" data-act="remote-new">+ Add remote</button>
   </div>
   <div id="remoteCards"></div>
+</section>
+
+<!-- Logs -------------------------------------------------------------------->
+<section id="page-logs" class="page" hidden>
+  <div class="page-head">
+    <div>
+      <h2>Logs</h2>
+      <div class="dim">Raw persisted Copyarr and rclone output. New entries follow the logging setting.</div>
+    </div>
+    <div class="row-actions">
+      <button class="btn" data-act="logs-refresh">Refresh</button>
+      <button class="btn btn-danger" data-act="logs-clear">Clear logs</button>
+    </div>
+  </div>
+  <section class="card">
+    <div class="card-head">
+      <div><h2>Application log</h2><div class="dim" id="logCount">loading...</div></div>
+      <select id="logLevel" style="width:auto" data-act="log-filter">
+        <option value="all">All levels</option>
+        <option value="ERROR">Errors</option>
+        <option value="WARN">Warnings</option>
+        <option value="INFO">Info</option>
+      </select>
+    </div>
+    <div class="log-console" id="globalLog">Loading logs...</div>
+  </section>
+</section>
+
+<!-- Settings ---------------------------------------------------------------->
+<section id="page-settings" class="page" hidden>
+  <div class="page-head">
+    <div>
+      <h2>Settings</h2>
+      <div class="dim">Copyarr-wide behaviour. Account and authentication options can live here later.</div>
+    </div>
+  </div>
+  <section class="card">
+    <div class="settings-row">
+      <div>
+        <h3>Persistent logging</h3>
+        <div class="dim" style="margin-top:4px">Store Copyarr events and raw rclone transfer output in SQLite for troubleshooting.</div>
+      </div>
+      <label class="switch"><input id="settingLogging" type="checkbox" data-act="setting-logging"><span></span></label>
+    </div>
+    <div class="settings-row">
+      <div>
+        <h3>Accounts</h3>
+        <div class="dim" style="margin-top:4px">Reserved for future users, authentication and Nexus access.</div>
+      </div>
+      <span class="chip">Coming later</span>
+    </div>
+  </section>
 </section>
 
 </div>
@@ -435,6 +489,22 @@ details.adv>div{padding:6px 0 16px}
       </div>
 
       <div class="form-section">
+        <div class="form-section-title">Filters</div>
+        <div class="form-grid">
+          <label class="field">
+            <span class="field-label">Include patterns</span>
+            <textarea id="defIncludes" placeholder="*.mkv&#10;important/**" spellcheck="false"></textarea>
+            <span class="field-help">One glob per line. Includes are exceptions and always win over excludes.</span>
+          </label>
+          <label class="field">
+            <span class="field-label">Exclude patterns</span>
+            <textarea id="defExcludes" placeholder="**&#10;*.sample.*" spellcheck="false"></textarea>
+            <span class="field-help">One glob per line. Example: exclude ** and include *.mkv to copy only MKV files.</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="form-section">
         <div class="form-section-title">Retries</div>
         <div class="form-grid">
           <label class="field">
@@ -504,6 +574,32 @@ details.adv>div{padding:6px 0 16px}
       <span class="spacer"></span>
       <button class="btn" data-act="job-close">Cancel</button>
       <button class="btn btn-primary" data-act="job-save">Save job</button>
+    </div>
+  </div>
+</div>
+
+<!-- Execution detail --------------------------------------------------------->
+<div class="overlay" id="executionModal" hidden>
+  <div class="modal w-lg" role="dialog" aria-modal="true" aria-labelledby="executionTitle">
+    <div class="modal-head">
+      <div>
+        <h2 id="executionTitle">Transfer</h2>
+        <div class="dim" id="executionSub"></div>
+      </div>
+      <button class="icon-btn" data-act="execution-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="detail-grid" id="executionStats"></div>
+      <div class="detail-tabs">
+        <button class="btn filter active" data-act="execution-tab" data-val="overview">Files</button>
+        <button class="btn filter" data-act="execution-tab" data-val="log">Log</button>
+      </div>
+      <div id="executionFiles"></div>
+      <div id="executionLog" class="log-console" hidden></div>
+    </div>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <button class="btn" data-act="execution-close">Close</button>
     </div>
   </div>
 </div>
