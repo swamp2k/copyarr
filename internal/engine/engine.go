@@ -16,6 +16,7 @@ import (
 
 	"github.com/swamp2k/copyarr/internal/config"
 	"github.com/swamp2k/copyarr/internal/db"
+	"github.com/swamp2k/copyarr/internal/logging"
 	rc "github.com/swamp2k/copyarr/internal/rclone"
 	rt "github.com/swamp2k/copyarr/internal/rtorrent"
 )
@@ -53,6 +54,17 @@ type JobView struct {
 	db.Job
 	AttemptNumber int `json:"attempt_number"`
 	MaxAttempts   int `json:"max_attempts"`
+}
+
+type JobDetail struct {
+	Job   JobView      `json:"job"`
+	Items []db.JobItem `json:"items"`
+	Stats []db.JobStat `json:"stats"`
+	Logs  []db.LogEntry `json:"logs"`
+}
+
+type Settings struct {
+	LoggingEnabled bool `json:"logging_enabled"`
 }
 
 type Status struct {
@@ -278,6 +290,9 @@ func (e *Engine) scanRule(ctx context.Context, r config.Rule) error {
 	seen := make([]seenItem, 0, len(items))
 	for _, it := range items {
 		if it.IsDir {
+			continue
+		}
+		if !pathAllowed(it.Path, r.Includes, r.Excludes) {
 			continue
 		}
 		k := objectKey(it.Path, it.Size, it.ModTime)
@@ -572,20 +587,25 @@ func (e *Engine) transferJob(ctx context.Context, r config.Rule, job db.Job, ite
 	e.setPhase(job.ID, "transferring")
 
 	slog.Info("copying job", "job", job.ID, "kind", job.Kind, "name", job.DisplayName, "source", src, "stage", stage, "items", len(items), "bytes", job.TotalBytes, "verification", r.Verification, "multi_thread_streams", r.MultiThreadStreams)
+	extraArgs := append([]string(nil), r.RcloneArgs...)
+	extraArgs = append(extraArgs, rcloneFilterArgs(r, job.RelRoot)...)
+	rawLog := func(line string) {
+		logging.Raw("INFO", "rclone", line, &job.ID)
+	}
+	progress := func(p rc.Progress) {
+		e.updateRcloneProgress(job.ID, p)
+		_ = e.db.AddJobStat(job.ID, "transferring", p.Bytes, job.TotalBytes, p.Speed, p.ETASeconds)
+	}
 	var usedMT bool
 	if isDir {
 		var err error
-		usedMT, err = e.rc.CopyDirWithMultiThreadFallback(transferCtx, src, stage, r.RcloneArgs, r.MultiThreadStreams, r.MultiThreadCutoff, func(p rc.Progress) {
-			e.updateRcloneProgress(job.ID, p)
-		})
+		usedMT, err = e.rc.CopyDirWithMultiThreadFallback(transferCtx, src, stage, extraArgs, r.MultiThreadStreams, r.MultiThreadCutoff, progress, rawLog)
 		if err != nil {
 			return err
 		}
 	} else {
 		var err error
-		usedMT, err = e.rc.CopyToWithMultiThreadFallback(transferCtx, src, stage, r.RcloneArgs, r.MultiThreadStreams, r.MultiThreadCutoff, func(p rc.Progress) {
-			e.updateRcloneProgress(job.ID, p)
-		})
+		usedMT, err = e.rc.CopyToWithMultiThreadFallback(transferCtx, src, stage, extraArgs, r.MultiThreadStreams, r.MultiThreadCutoff, progress, rawLog)
 		if err != nil {
 			return err
 		}
@@ -688,10 +708,16 @@ func (e *Engine) beginActive(job db.Job, r config.Rule, cancel context.CancelFun
 }
 
 func (e *Engine) setPhase(jobID int64, phase string) {
+	var snap *ActiveTransfer
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if e.active != nil && e.active.JobID == jobID {
 		e.active.Phase = phase
+		cp := *e.active
+		snap = &cp
+	}
+	e.mu.Unlock()
+	if snap != nil {
+		_ = e.db.AddJobStat(jobID, phase, snap.TransferredBytes, snap.TotalBytes, snap.SpeedBps, snap.ETASeconds)
 	}
 }
 
@@ -824,6 +850,18 @@ func (e *Engine) jobByID(jobID int64) (db.Job, bool) {
 	return db.Job{}, false
 }
 
+func (e *Engine) jobView(j db.Job) JobView {
+	maxAttempts := 1
+	if r, ok := e.rule(j.RuleID); ok {
+		maxAttempts = r.RetryLimit() + 1
+	}
+	attempt := j.Attempts
+	if j.State == "queued" {
+		attempt = j.Attempts + 1
+	}
+	return JobView{Job: j, AttemptNumber: attempt, MaxAttempts: maxAttempts}
+}
+
 func (e *Engine) Jobs(limit int) ([]JobView, error) {
 	jobs, err := e.db.ListJobs(limit)
 	if err != nil {
@@ -831,17 +869,54 @@ func (e *Engine) Jobs(limit int) ([]JobView, error) {
 	}
 	out := make([]JobView, 0, len(jobs))
 	for _, j := range jobs {
-		maxAttempts := 1
-		if r, ok := e.rule(j.RuleID); ok {
-			maxAttempts = r.RetryLimit() + 1
-		}
-		attempt := j.Attempts
-		if j.State == "queued" {
-			attempt = j.Attempts + 1
-		}
-		out = append(out, JobView{Job: j, AttemptNumber: attempt, MaxAttempts: maxAttempts})
+		out = append(out, e.jobView(j))
 	}
 	return out, nil
+}
+
+func (e *Engine) JobDetail(id int64) (JobDetail, error) {
+	j, err := e.db.GetJob(id)
+	if err != nil {
+		return JobDetail{}, err
+	}
+	items, err := e.db.JobItems(id)
+	if err != nil {
+		return JobDetail{}, err
+	}
+	stats, err := e.db.ListJobStats(id, 5000)
+	if err != nil {
+		return JobDetail{}, err
+	}
+	logs, err := e.db.ListLogs(1000, &id)
+	if err != nil {
+		return JobDetail{}, err
+	}
+	return JobDetail{Job: e.jobView(j), Items: items, Stats: stats, Logs: logs}, nil
+}
+
+func (e *Engine) Logs(limit int, jobID *int64) ([]db.LogEntry, error) {
+	return e.db.ListLogs(limit, jobID)
+}
+
+func (e *Engine) Settings() Settings {
+	return Settings{LoggingEnabled: logging.Enabled()}
+}
+
+func (e *Engine) SetLoggingEnabled(on bool) error {
+	value := "false"
+	if on {
+		value = "true"
+	}
+	if err := e.db.SetMeta("settings:logging_enabled", value); err != nil {
+		return err
+	}
+	logging.SetEnabled(on)
+	slog.Info("logging setting changed", "enabled", on)
+	return nil
+}
+
+func (e *Engine) ClearLogs() error {
+	return e.db.ClearLogs()
 }
 
 func (e *Engine) Status() (Status, error) {
