@@ -659,6 +659,7 @@ func (e *Engine) transferJob(ctx context.Context, r config.Rule, job db.Job, ite
 	if err := e.db.CompleteJob(job.ID, final); err != nil {
 		return err
 	}
+	_ = e.db.AddJobStat(job.ID, "done", job.TotalBytes, job.TotalBytes, 0, nil)
 	slog.Info("job completed", "job", job.ID, "name", job.DisplayName, "items", len(items), "bytes", job.TotalBytes, "destination", final)
 	return nil
 }
