@@ -10,6 +10,7 @@ Copyarr is a small persistent transfer queue for automated copy/move jobs. It is
 - Stability-based readiness fallback.
 - Optional rTorrent XML-RPC readiness: only paths belonging to completed torrents are queued.
 - Persistent grouped job queue. Restarting the container does not erase state.
+- Bounded automatic retries with configurable retry count/wait, persisted retry scheduling and a terminal `failed` state.
 - One completed rTorrent payload becomes one Copyarr job, with all files verified as a manifest.
 - Copy into a hidden `.copyarr-staging/<job-id>/...` area, verify exact byte sizes, then commit to the final destination.
 - `move` means copy + verify + commit before deleting the source.
@@ -51,6 +52,10 @@ When enabled, Copyarr calls `d.multicall2` for hash, name, completion state and 
 - `GET /api/jobs?limit=100`
 - `GET /api/objects?limit=200`
 - `POST /api/scan`
+- `POST /api/jobs/{id}/retry`
+- `POST /api/jobs/{id}/pause`
+- `POST /api/jobs/{id}/resume`
+- `POST /api/jobs/{id}/cancel`
 
 Default listen address: `:8686`.
 
@@ -64,7 +69,7 @@ Jobs independently move through:
 
 `queued -> copying -> done`
 
-with `retry_wait` on transfer failure, `ignored` for initial bootstrap objects, `superseded` for an older generation of a still-growing upload, and `cleaned` after managed retention cleanup.
+with `retry_wait` while an automatic retry is scheduled, `failed` when the retry budget is exhausted, `paused`/`cancelled` for operator controls, `ignored` for initial bootstrap objects, `superseded` for an older generation of a still-growing upload, and `cleaned` after managed retention cleanup.
 
 Object identity includes relative path, exact size and modification time. A destination can therefore be moved away by Sonarr/Tdarr without Copyarr "forgetting" that the source generation was already handled.
 
