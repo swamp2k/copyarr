@@ -185,6 +185,10 @@ AND id NOT IN (SELECT object_id FROM job_items)`); err != nil {
 
 func now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
+func retryTimestamp(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05.000000000Z")
+}
+
 func (d *DB) Meta(key string) (string, bool, error) {
 	var v string
 	err := d.QueryRow(`SELECT value FROM meta WHERE key=?`, key).Scan(&v)
@@ -390,7 +394,7 @@ func (d *DB) FailJob(id int64, msg string, retryAt *time.Time) error {
 	var retryValue any
 	if retryAt != nil {
 		state = "retry_wait"
-		retryValue = retryAt.UTC().Format(time.RFC3339Nano)
+		retryValue = retryTimestamp(*retryAt)
 	}
 	tx, err := d.Begin()
 	if err != nil {
@@ -408,12 +412,13 @@ func (d *DB) FailJob(id int64, msg string, retryAt *time.Time) error {
 
 func (d *DB) PromoteDueRetries() error {
 	ts := now()
+	due := retryTimestamp(time.Now())
 	tx, err := d.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT id FROM jobs WHERE state='retry_wait' AND next_retry_at IS NOT NULL AND next_retry_at<=?`, ts)
+	rows, err := tx.Query(`SELECT id FROM jobs WHERE state='retry_wait' AND next_retry_at IS NOT NULL AND next_retry_at<=?`, due)
 	if err != nil {
 		return err
 	}
