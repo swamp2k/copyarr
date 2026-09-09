@@ -46,6 +46,8 @@ type Rule struct {
 	RetryWaitSeconds    *int      `json:"retry_wait_seconds"`
 	RTorrent           *RTorrent `json:"rtorrent,omitempty"`
 	RcloneArgs         []string  `json:"rclone_args,omitempty"`
+	Includes           []string  `json:"includes,omitempty"`
+	Excludes           []string  `json:"excludes,omitempty"`
 }
 
 func Load(path string) (Config, error) {
