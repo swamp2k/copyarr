@@ -14,6 +14,7 @@ import (
 	"github.com/swamp2k/copyarr/internal/config"
 	"github.com/swamp2k/copyarr/internal/db"
 	"github.com/swamp2k/copyarr/internal/engine"
+	"github.com/swamp2k/copyarr/internal/logging"
 )
 
 var (
@@ -46,6 +47,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer database.Close()
+
+	loggingEnabled := true
+	if v, ok, metaErr := database.Meta("settings:logging_enabled"); metaErr == nil && ok && v == "false" {
+		loggingEnabled = false
+	}
+	logging.Install(database, loggingEnabled)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
