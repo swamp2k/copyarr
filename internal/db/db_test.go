@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -81,5 +82,67 @@ func TestManualRetryResetsAttemptBudget(t *testing.T) {
 	}
 	if state != "queued" || attempts != 0 {
 		t.Fatalf("state=%q attempts=%d want queued/0", state, attempts)
+	}
+}
+
+func TestOpenMigratesExistingJobsTable(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "old.db")
+	raw, err := sql.Open("sqlite", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = raw.Exec(`CREATE TABLE jobs(
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		rule_id TEXT NOT NULL,
+		job_key TEXT NOT NULL,
+		kind TEXT NOT NULL,
+		display_name TEXT NOT NULL,
+		rel_root TEXT NOT NULL,
+		state TEXT NOT NULL,
+		reason TEXT NOT NULL DEFAULT '',
+		total_bytes INTEGER NOT NULL DEFAULT 0,
+		item_count INTEGER NOT NULL DEFAULT 0,
+		attempts INTEGER NOT NULL DEFAULT 0,
+		last_error TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		started_at TEXT,
+		completed_at TEXT,
+		dest_path TEXT NOT NULL DEFAULT '',
+		UNIQUE(rule_id,job_key)
+	)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := Open(p)
+	if err != nil {
+		t.Fatalf("Open old schema: %v", err)
+	}
+	defer d.Close()
+
+	rows, err := d.Query("PRAGMA table_info(jobs)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var def any
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &def, &pk); err != nil {
+			t.Fatal(err)
+		}
+		if name == "next_retry_at" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("next_retry_at column was not added")
 	}
 }
