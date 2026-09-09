@@ -30,6 +30,7 @@ type Progress struct {
 }
 
 type ProgressFunc func(Progress)
+type RawLogFunc func(string)
 
 type Item struct {
 	Path    string    `json:"Path"`
@@ -71,7 +72,7 @@ func (c Client) runWith(ctx context.Context, configPath string, args ...string) 
 	return out, nil
 }
 
-func (c Client) runCopyJSONStats(ctx context.Context, args []string, progress ProgressFunc) error {
+func (c Client) runCopyJSONStats(ctx context.Context, args []string, progress ProgressFunc, rawLog RawLogFunc) error {
 	base := []string{}
 	if c.ConfigPath != "" {
 		base = append(base, "--config", c.ConfigPath)
@@ -125,6 +126,9 @@ func (c Client) runCopyJSONStats(ctx context.Context, args []string, progress Pr
 			continue
 		}
 		nonStats = append(nonStats, line)
+		if rawLog != nil {
+			rawLog(line)
+		}
 	}
 
 	err = cmd.Wait()
@@ -137,8 +141,8 @@ func (c Client) runCopyJSONStats(ctx context.Context, args []string, progress Pr
 	return nil
 }
 
-func (c Client) runCopy(ctx context.Context, args []string, progress ProgressFunc) error {
-	err := c.runCopyJSONStats(ctx, args, progress)
+func (c Client) runCopy(ctx context.Context, args []string, progress ProgressFunc, rawLog RawLogFunc) error {
+	err := c.runCopyJSONStats(ctx, args, progress, rawLog)
 	if err == nil {
 		return nil
 	}
@@ -155,7 +159,15 @@ func (c Client) runCopy(ctx context.Context, args []string, progress ProgressFun
 	cmd := exec.CommandContext(ctx, "rclone", append(base, args...)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	err = cmd.Run()
+	if rawLog != nil {
+		for _, line := range strings.Split(strings.TrimSpace(stderr.String()), "\n") {
+			if strings.TrimSpace(line) != "" {
+				rawLog(line)
+			}
+		}
+	}
+	if err != nil {
 		return fmt.Errorf("rclone %v: %w: %s", args, err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
@@ -273,7 +285,7 @@ func (c Client) CopyDir(ctx context.Context, src, dst string, extra []string) er
 	return err
 }
 
-func (c Client) CopyToWithMultiThreadFallback(ctx context.Context, src, dst string, extra []string, streams int, cutoff string, progress ProgressFunc) (bool, error) {
+func (c Client) CopyToWithMultiThreadFallback(ctx context.Context, src, dst string, extra []string, streams int, cutoff string, progress ProgressFunc, rawLog RawLogFunc) (bool, error) {
 	withMT := append([]string{"copyto", src, dst, "--partial-suffix", ".copyarr-part"}, extra...)
 	if streams > 1 {
 		withMT = append(withMT, "--multi-thread-streams", fmt.Sprint(streams))
@@ -281,7 +293,7 @@ func (c Client) CopyToWithMultiThreadFallback(ctx context.Context, src, dst stri
 			withMT = append(withMT, "--multi-thread-cutoff", cutoff)
 		}
 	}
-	err := c.runCopy(ctx, withMT, progress)
+	err := c.runCopy(ctx, withMT, progress, rawLog)
 	if err == nil || streams <= 1 {
 		return streams > 1, err
 	}
@@ -289,10 +301,10 @@ func (c Client) CopyToWithMultiThreadFallback(ctx context.Context, src, dst stri
 		return true, err
 	}
 	fallback := append([]string{"copyto", src, dst, "--partial-suffix", ".copyarr-part"}, extra...)
-	return false, c.runCopy(ctx, fallback, progress)
+	return false, c.runCopy(ctx, fallback, progress, rawLog)
 }
 
-func (c Client) CopyDirWithMultiThreadFallback(ctx context.Context, src, dst string, extra []string, streams int, cutoff string, progress ProgressFunc) (bool, error) {
+func (c Client) CopyDirWithMultiThreadFallback(ctx context.Context, src, dst string, extra []string, streams int, cutoff string, progress ProgressFunc, rawLog RawLogFunc) (bool, error) {
 	withMT := append([]string{"copy", src, dst, "--partial-suffix", ".copyarr-part"}, extra...)
 	if streams > 1 {
 		withMT = append(withMT, "--multi-thread-streams", fmt.Sprint(streams))
