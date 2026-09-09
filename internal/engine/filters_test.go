@@ -39,7 +39,13 @@ func TestFilterPatterns(t *testing.T) {
 func TestRcloneFilterOrderKeepsIncludesFirst(t *testing.T) {
 	r := config.Rule{Includes: []string{"*.mkv"}, Excludes: []string{"**"}}
 	want := []string{"--filter", "+ *.mkv", "--filter", "+ */", "--filter", "- **"}
-	if got := rcloneFilterArgs(r); !reflect.DeepEqual(got, want) {
+	if got := rcloneFilterArgs(r, ""); !reflect.DeepEqual(got, want) {
 		t.Fatalf("rcloneFilterArgs=%v want %v", got, want)
+	}
+}
+
+func TestTransferPatternStripsGroupedRoot(t *testing.T) {
+	if got := transferPattern("Movie/**/*.mkv", "Movie"); got != "**/*.mkv" {
+		t.Fatalf("transferPattern=%q want %q", got, "**/*.mkv")
 	}
 }
