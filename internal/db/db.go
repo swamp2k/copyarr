@@ -28,7 +28,6 @@ type Object struct {
 	LastError   string  `json:"last_error"`
 	CompletedAt *string `json:"completed_at,omitempty"`
 	DestPath    string  `json:"dest_path"`
-	NextRetryAt *string `json:"next_retry_at,omitempty"`
 }
 
 type Job struct {
