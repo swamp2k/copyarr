@@ -1,4 +1,7 @@
-copyarr
+# The built binary, anchored to the repo root. Without the leading slash this
+# also matches the cmd/copyarr package directory, which silently ignores any
+# new source file added there.
+/copyarr
 *.db
 *.db-shm
 *.db-wal
