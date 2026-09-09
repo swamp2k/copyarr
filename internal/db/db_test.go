@@ -53,7 +53,7 @@ func TestScheduledRetryPromotesOnlyWhenDue(t *testing.T) {
 		t.Fatalf("state=%q next=%v want retry_wait with timestamp", state, next)
 	}
 
-	past := time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano)
+	past := retryTimestamp(time.Now().UTC().Add(-time.Second))
 	if _, err := d.Exec(`UPDATE jobs SET next_retry_at=? WHERE id=?`, past, id); err != nil {
 		t.Fatal(err)
 	}
