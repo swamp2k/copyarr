@@ -17,6 +17,8 @@
       "verification": "size",
       "multi_thread_streams": 4,
       "multi_thread_cutoff": "256M",
+      "retry_count": 3,
+      "retry_wait_seconds": 300,
       "rtorrent": {
         "url": "https://seedbox.example/RPC2",
         "username": "",
