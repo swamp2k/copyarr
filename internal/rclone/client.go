@@ -152,6 +152,93 @@ func (c Client) runCopy(ctx context.Context, args []string, progress ProgressFun
 	return nil
 }
 
+
+type RemoteInfo struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+
+type ConfigQuestion struct {
+	State  string         `json:"State"`
+	Option map[string]any `json:"Option"`
+	Error  string         `json:"Error"`
+}
+
+func (c Client) ListRemotes(ctx context.Context) ([]RemoteInfo, error) {
+	out, err := c.run(ctx, "listremotes")
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	remotes := make([]RemoteInfo, 0, len(lines))
+	for _, line := range lines {
+		name := strings.TrimSuffix(strings.TrimSpace(line), ":")
+		if name == "" {
+			continue
+		}
+		typ := ""
+		if redacted, e := c.run(ctx, "config", "redacted", name); e == nil {
+			for _, l := range strings.Split(string(redacted), "\n") {
+				l = strings.TrimSpace(l)
+				if strings.HasPrefix(l, "type = ") {
+					typ = strings.TrimSpace(strings.TrimPrefix(l, "type = "))
+					break
+				}
+			}
+		}
+		remotes = append(remotes, RemoteInfo{Name: name, Type: typ})
+	}
+	return remotes, nil
+}
+
+func (c Client) CreateRemote(ctx context.Context, name, typ string, params map[string]string) (*ConfigQuestion, error) {
+	args := []string{"config", "create", name, typ, "--non-interactive", "--obscure"}
+	for k, v := range params {
+		args = append(args, k, v)
+	}
+	out, err := c.run(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	var q ConfigQuestion
+	if json.Unmarshal(out, &q) == nil && q.State != "" {
+		return &q, nil
+	}
+	return nil, nil
+}
+
+func (c Client) UpdateRemote(ctx context.Context, name string, params map[string]string) (*ConfigQuestion, error) {
+	args := []string{"config", "update", name, "--non-interactive", "--obscure"}
+	for k, v := range params {
+		args = append(args, k, v)
+	}
+	out, err := c.run(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	var q ConfigQuestion
+	if json.Unmarshal(out, &q) == nil && q.State != "" {
+		return &q, nil
+	}
+	return nil, nil
+}
+
+func (c Client) DeleteRemote(ctx context.Context, name string) error {
+	_, err := c.run(ctx, "config", "delete", name)
+	return err
+}
+
+func (c Client) Providers(ctx context.Context) (json.RawMessage, error) {
+	out, err := c.run(ctx, "config", "providers")
+	if err != nil {
+		return nil, err
+	}
+	if !json.Valid(out) {
+		return nil, fmt.Errorf("rclone providers returned invalid JSON")
+	}
+	return json.RawMessage(out), nil
+}
+
 func (c Client) ListFiles(ctx context.Context, e config.Endpoint) ([]Item, error) {
 	out, err := c.run(ctx, "lsjson", Target(e, ""), "--recursive", "--files-only")
 	if err != nil {
