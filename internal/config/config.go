@@ -67,53 +67,65 @@ func Load(path string) (Config, error) {
 		c.ScanIntervalSeconds = 300
 	}
 	for i := range c.Rules {
-		r := &c.Rules[i]
-		if r.ID == "" {
-			return c, fmt.Errorf("rule %d missing id", i)
-		}
-		if r.Mode == "" {
-			r.Mode = "copy"
-		}
-		if r.InitialBehavior == "" {
-			r.InitialBehavior = "ignore_existing"
-		}
-		if r.StabilitySeconds <= 0 {
-			r.StabilitySeconds = 600
-		}
-		if r.Verification == "" {
-			r.Verification = "size"
-		}
-		if r.Verification != "none" && r.Verification != "size" {
-			return c, fmt.Errorf("rule %s has unsupported verification %q (use none or size)", r.ID, r.Verification)
-		}
-		if r.MultiThreadStreams < 0 {
-			return c, fmt.Errorf("rule %s has invalid multi_thread_streams", r.ID)
-		}
-		if r.MultiThreadStreams == 0 {
-			r.MultiThreadStreams = 4
-		}
-		if r.MultiThreadCutoff == "" {
-			r.MultiThreadCutoff = "256M"
-		}
-		if r.RetryCount == nil {
-			v := 3
-			r.RetryCount = &v
-		}
-		if *r.RetryCount < 0 {
-			return c, fmt.Errorf("rule %s has invalid retry_count", r.ID)
-		}
-		if r.RetryWaitSeconds == nil {
-			v := 300
-			r.RetryWaitSeconds = &v
-		}
-		if *r.RetryWaitSeconds < 0 {
-			return c, fmt.Errorf("rule %s has invalid retry_wait_seconds", r.ID)
-		}
-		if r.RTorrent != nil && r.RTorrent.View == "" {
-			r.RTorrent.View = "main"
+		if err := NormalizeRule(&c.Rules[i], i); err != nil {
+			return c, err
 		}
 	}
 	return c, nil
+}
+
+func NormalizeRule(r *Rule, index int) error {
+	if r.ID == "" {
+		return fmt.Errorf("rule %d missing id", index)
+	}
+	if r.Name == "" {
+		r.Name = r.ID
+	}
+	if r.Mode == "" {
+		r.Mode = "copy"
+	}
+	if r.Mode != "copy" && r.Mode != "move" {
+		return fmt.Errorf("rule %s has unsupported mode %q", r.ID, r.Mode)
+	}
+	if r.InitialBehavior == "" {
+		r.InitialBehavior = "ignore_existing"
+	}
+	if r.StabilitySeconds <= 0 {
+		r.StabilitySeconds = 600
+	}
+	if r.Verification == "" {
+		r.Verification = "size"
+	}
+	if r.Verification != "none" && r.Verification != "size" {
+		return fmt.Errorf("rule %s has unsupported verification %q (use none or size)", r.ID, r.Verification)
+	}
+	if r.MultiThreadStreams < 0 {
+		return fmt.Errorf("rule %s has invalid multi_thread_streams", r.ID)
+	}
+	if r.MultiThreadStreams == 0 {
+		r.MultiThreadStreams = 4
+	}
+	if r.MultiThreadCutoff == "" {
+		r.MultiThreadCutoff = "256M"
+	}
+	if r.RetryCount == nil {
+		v := 3
+		r.RetryCount = &v
+	}
+	if *r.RetryCount < 0 {
+		return fmt.Errorf("rule %s has invalid retry_count", r.ID)
+	}
+	if r.RetryWaitSeconds == nil {
+		v := 300
+		r.RetryWaitSeconds = &v
+	}
+	if *r.RetryWaitSeconds < 0 {
+		return fmt.Errorf("rule %s has invalid retry_wait_seconds", r.ID)
+	}
+	if r.RTorrent != nil && r.RTorrent.View == "" {
+		r.RTorrent.View = "main"
+	}
+	return nil
 }
 
 func (r Rule) RetryLimit() int {
