@@ -70,13 +70,13 @@ func globRegex(pattern string) string {
 	return b.String()
 }
 
-func rcloneFilterArgs(r config.Rule) []string {
+func rcloneFilterArgs(r config.Rule, relRoot string) []string {
 	if len(r.Includes) == 0 && len(r.Excludes) == 0 {
 		return nil
 	}
 	args := make([]string, 0, (len(r.Includes)+len(r.Excludes)+1)*2)
 	for _, p := range r.Includes {
-		if p = strings.TrimSpace(p); p != "" {
+		if p = transferPattern(p, relRoot); p != "" {
 			args = append(args, "--filter", "+ "+p)
 		}
 	}
@@ -86,9 +86,24 @@ func rcloneFilterArgs(r config.Rule) []string {
 		args = append(args, "--filter", "+ */")
 	}
 	for _, p := range r.Excludes {
-		if p = strings.TrimSpace(p); p != "" {
+		if p = transferPattern(p, relRoot); p != "" {
 			args = append(args, "--filter", "- "+p)
 		}
 	}
 	return args
+}
+
+func transferPattern(pattern, relRoot string) string {
+	pattern = strings.TrimSpace(strings.TrimPrefix(pattern, "/"))
+	root := strings.Trim(strings.TrimSpace(relRoot), "/")
+	if pattern == "" || root == "" {
+		return pattern
+	}
+	if pattern == root {
+		return "**"
+	}
+	if strings.HasPrefix(pattern, root+"/") {
+		return strings.TrimPrefix(pattern, root+"/")
+	}
+	return pattern
 }
