@@ -1764,11 +1764,13 @@ async function wizSave(){
 
 /* Navigation and events ---------------------------------------------------- */
 function showPage(name, tab){
-  ["dashboard","jobs","remotes"].forEach(function(p){ $("page-" + p).hidden = p !== name; });
+  ["dashboard","jobs","remotes","logs","settings"].forEach(function(p){ $("page-" + p).hidden = p !== name; });
   Array.prototype.forEach.call(document.querySelectorAll(".tab"), function(t){ t.classList.remove("active"); });
   if(tab) tab.classList.add("active");
   if(name === "jobs"){ refreshRemotes(false); refreshDefs(); }
   if(name === "remotes") refreshRemotes();
+  if(name === "logs") refreshLogs();
+  if(name === "settings") refreshSettings();
 }
 
 function setFilter(f, el){
@@ -1798,6 +1800,12 @@ document.addEventListener("click", function(ev){
   }
   else if(act === "page") showPage(t.dataset.val, t);
   else if(act === "filter") setFilter(t.dataset.val, t);
+  else if(act === "execution-open") openExecution(t.dataset.id);
+  else if(act === "execution-close") closeExecution();
+  else if(act === "execution-tab") setExecutionTab(t.dataset.val, t);
+  else if(act === "logs-refresh") refreshLogs();
+  else if(act === "logs-clear") clearLogs();
+  else if(act === "setting-logging") setLogging(t.checked);
   else if(act === "job-ctl") controlJob(t.dataset.id, t.dataset.ctl);
   else if(act === "job-new") openJobModal(null);
   else if(act === "job-edit") openJobModal(t.dataset.id);
@@ -1849,6 +1857,7 @@ Array.prototype.forEach.call(document.querySelectorAll(".overlay"), function(o){
   o.addEventListener("mousedown", function(ev){
     if(ev.target !== o) return;
     if(o.id === "confirmModal") closeConfirm(false);
+    else if(o.id === "executionModal") closeExecution();
     else if(o.id === "jobModal") closeJobModal();
     else closeRemoteWizard();
   });
@@ -1859,6 +1868,7 @@ Array.prototype.forEach.call(document.querySelectorAll(".overlay"), function(o){
 document.addEventListener("keydown", function(ev){
   if(ev.key !== "Escape") return;
   if(!$("confirmModal").hidden) closeConfirm(false);
+  else if(!$("executionModal").hidden) closeExecution();
   else if(!$("remoteModal").hidden) closeRemoteWizard();
   else if(!$("jobModal").hidden) closeJobModal();
 });
@@ -1895,7 +1905,17 @@ $("remoteBody").addEventListener("change", function(ev){
 /* Boot --------------------------------------------------------------------- */
 refresh();
 refreshRemotes(false);
+refreshSettings();
+$("logLevel").addEventListener("change", renderGlobalLogs);
 setInterval(refresh, 2000);
+setInterval(function(){
+  if(!$("page-logs").hidden) refreshLogs();
+}, 3000);
+setInterval(function(){
+  if(!$("executionModal").hidden && executionDetail && executionDetail.job && executionDetail.job.state === "copying"){
+    openExecution(executionDetail.job.id);
+  }
+}, 3000);
 </script>
 </body>
 </html>`
