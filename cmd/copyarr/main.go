@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -34,6 +35,10 @@ func main() {
 		slog.Error("create data dir failed", "err", err)
 		os.Exit(1)
 	}
+	if err := prepareWritableRcloneConfig(&cfg); err != nil {
+		slog.Error("prepare writable rclone config failed", "err", err)
+		os.Exit(1)
+	}
 	database, err := db.Open(filepath.Join(cfg.DataDir, "copyarr.db"))
 	if err != nil {
 		slog.Error("open db failed", "err", err)
@@ -58,4 +63,46 @@ func main() {
 		slog.Error("http server failed", "err", err)
 		os.Exit(1)
 	}
+}
+
+func prepareWritableRcloneConfig(cfg *config.Config) error {
+	dir := filepath.Join(cfg.DataDir, "rclone")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	dst := filepath.Join(dir, "rclone.conf")
+	if _, err := os.Stat(dst); err == nil {
+		cfg.RcloneConfig = dst
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	if cfg.RcloneConfig != "" {
+		if src, err := os.Open(cfg.RcloneConfig); err == nil {
+			defer src.Close()
+			out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+			if err != nil {
+				return err
+			}
+			_, copyErr := io.Copy(out, src)
+			closeErr := out.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+			cfg.RcloneConfig = dst
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+
+	if err := os.WriteFile(dst, nil, 0o600); err != nil {
+		return err
+	}
+	cfg.RcloneConfig = dst
+	return nil
 }
