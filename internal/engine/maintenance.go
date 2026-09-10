@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/swamp2k/copyarr/internal/db"
 	"github.com/swamp2k/copyarr/internal/logging"
 )
 
@@ -137,5 +136,3 @@ func (e *Engine) ExecutionRows(limit int) ([]ExecutionRow, error) {
 	}
 	return out, nil
 }
-
-var _ = db.Job{}
