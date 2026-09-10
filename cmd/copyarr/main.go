@@ -61,7 +61,8 @@ func main() {
 	eng.Run(ctx)
 	eng.RunMaintenance(ctx)
 
-	srv := &http.Server{Addr: cfg.ListenAddr, Handler: api.New(eng).Handler()}
+	baseHandler := api.New(eng).Handler()
+	srv := &http.Server{Addr: cfg.ListenAddr, Handler: api.EnhanceHandler(baseHandler, eng)}
 	go func() {
 		<-ctx.Done()
 		_ = srv.Shutdown(context.Background())
