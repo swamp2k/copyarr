@@ -59,6 +59,7 @@ func main() {
 
 	eng := engine.New(cfg, database, version, revision)
 	eng.Run(ctx)
+	eng.RunMaintenance(ctx)
 
 	srv := &http.Server{Addr: cfg.ListenAddr, Handler: api.New(eng).Handler()}
 	go func() {
