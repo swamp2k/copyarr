@@ -11,20 +11,22 @@ func enhanceUI(html string) string {
 }
 
 const uiExtensionCSS = `
-.exec-tools{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-.column-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 14px;margin-top:10px}
-.column-choice{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
-.column-choice input{width:15px;height:15px;accent-color:var(--accent)}
-.sort-grid{display:grid;grid-template-columns:1fr 150px;gap:10px;margin-top:16px}
+.exec-head{display:flex;align-items:center;gap:4px;white-space:nowrap}
+.exec-head-label{border:0;background:transparent;color:inherit;font:inherit;font-weight:inherit;text-transform:inherit;letter-spacing:inherit;padding:0;cursor:pointer}
+.exec-head-label:hover{color:var(--text)}
+.exec-head-tools{display:inline-flex;gap:2px;margin-left:2px}
+.exec-head-btn{display:inline-grid;place-items:center;width:18px;height:18px;padding:0;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--faint);font:inherit;font-size:10px;cursor:pointer}
+.exec-head-btn:hover:not(:disabled){color:var(--text);border-color:var(--line);background:var(--panel-2)}
+.exec-head-btn:disabled{opacity:.2;cursor:default}
+.exec-add{min-width:118px}
+.exec-add select{padding:4px 7px;font-size:11px;min-width:118px}
 .log-follow{display:inline-flex;align-items:center;gap:6px;color:var(--good);font-size:11px}
 .log-follow.paused{color:var(--warn)}
 .log-follow .dot{width:6px;height:6px}
 .log-follow.paused .dot{background:var(--warn)}
 .retention-control{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .retention-control input{width:90px}
-th.exec-sortable{cursor:pointer}
-th.exec-sortable:hover{color:var(--text)}
-@media(max-width:620px){.column-list{grid-template-columns:1fr}.sort-grid{grid-template-columns:1fr}.exec-tools{width:100%}}
+@media(max-width:620px){.exec-head-tools{gap:1px}.exec-head-btn{width:20px;height:20px}.exec-add{min-width:108px}.exec-add select{min-width:108px}}
 `
 
 const uiExtensionJS = `
@@ -71,6 +73,27 @@ function execCompare(a,b,key){
   if(typeof av==="number"&&typeof bv==="number") return av-bv;
   return String(av).localeCompare(String(bv),undefined,{numeric:true,sensitivity:"base"});
 }
+function moveExecColumn(key,delta){
+  var i=execPrefs.columns.indexOf(key),next=i+delta;
+  if(i<0||next<0||next>=execPrefs.columns.length)return;
+  var tmp=execPrefs.columns[i];execPrefs.columns[i]=execPrefs.columns[next];execPrefs.columns[next]=tmp;
+  saveExecPrefs();renderJobs();
+}
+function hideExecColumn(key){
+  if(execPrefs.columns.length<=1){toast("Keep at least one column visible",true);return;}
+  execPrefs.columns=execPrefs.columns.filter(function(x){return x!==key;});
+  if(execPrefs.sort===key)execPrefs.sort=execPrefs.columns[0];
+  saveExecPrefs();renderJobs();
+}
+function addExecColumn(key){
+  if(!key||!execColumns[key]||execPrefs.columns.indexOf(key)>=0)return;
+  execPrefs.columns.push(key);saveExecPrefs();renderJobs();
+}
+function sortExecColumn(key){
+  if(execPrefs.sort===key)execPrefs.dir=execPrefs.dir==="asc"?"desc":"asc";
+  else{execPrefs.sort=key;execPrefs.dir="desc";}
+  saveExecPrefs();renderJobs();
+}
 
 renderJobs=function(){
   var shown=jobs.filter(visibleJob).slice();
@@ -78,42 +101,28 @@ renderJobs=function(){
   $("jobCount").textContent=shown.length+" shown of "+jobs.length+" loaded";
   var table=$("jobRows").closest("table");
   var head=table.querySelector("thead tr");
-  head.innerHTML=execPrefs.columns.map(function(k){
+  head.innerHTML=execPrefs.columns.map(function(k,i){
     var mark=execPrefs.sort===k?(execPrefs.dir==="asc"?" ↑":" ↓"):"";
-    return '<th class="exec-sortable" data-exec-sort="'+k+'">'+esc(execColumns[k].label+mark)+'</th>';
-  }).join("")+'<th></th>';
+    return '<th><div class="exec-head">'+
+      '<button class="exec-head-label" data-exec-sort="'+k+'" title="Sort by '+esc(execColumns[k].label)+'">'+esc(execColumns[k].label+mark)+'</button>'+
+      '<span class="exec-head-tools">'+
+        '<button class="exec-head-btn" data-exec-left="'+k+'" title="Move left" '+(i===0?"disabled":"")+'>&larr;</button>'+
+        '<button class="exec-head-btn" data-exec-right="'+k+'" title="Move right" '+(i===execPrefs.columns.length-1?"disabled":"")+'>&rarr;</button>'+
+        '<button class="exec-head-btn" data-exec-hide="'+k+'" title="Hide column">&times;</button>'+
+      '</span></div></th>';
+  }).join("")+'<th class="exec-add"><select data-exec-add><option value="">+ Add column</option>'+execColumnOrder.filter(function(k){return execPrefs.columns.indexOf(k)<0;}).map(function(k){return '<option value="'+k+'">'+esc(execColumns[k].label)+'</option>';}).join("")+'</select></th>';
   if(!shown.length){$("jobRows").innerHTML='<tr><td colspan="'+(execPrefs.columns.length+1)+'" class="empty-row">No executions match this filter.</td></tr>';return;}
   $("jobRows").innerHTML=shown.map(function(j){
     return '<tr data-act="execution-open" data-id="'+j.id+'" style="cursor:pointer">'+
       execPrefs.columns.map(function(k){return '<td>'+execColumns[k].render(j)+'</td>';}).join("")+
       '<td><div class="row-actions">'+controls(j)+'</div></td></tr>';
   }).join("");
-  Array.prototype.forEach.call(head.querySelectorAll("[data-exec-sort]"),function(th){
-    th.addEventListener("click",function(){var k=this.dataset.execSort;if(execPrefs.sort===k)execPrefs.dir=execPrefs.dir==="asc"?"desc":"asc";else{execPrefs.sort=k;execPrefs.dir="desc";}saveExecPrefs();renderJobs();});
-  });
+  Array.prototype.forEach.call(head.querySelectorAll("[data-exec-sort]"),function(el){el.addEventListener("click",function(ev){ev.stopPropagation();sortExecColumn(this.dataset.execSort);});});
+  Array.prototype.forEach.call(head.querySelectorAll("[data-exec-left]"),function(el){el.addEventListener("click",function(ev){ev.stopPropagation();moveExecColumn(this.dataset.execLeft,-1);});});
+  Array.prototype.forEach.call(head.querySelectorAll("[data-exec-right]"),function(el){el.addEventListener("click",function(ev){ev.stopPropagation();moveExecColumn(this.dataset.execRight,1);});});
+  Array.prototype.forEach.call(head.querySelectorAll("[data-exec-hide]"),function(el){el.addEventListener("click",function(ev){ev.stopPropagation();hideExecColumn(this.dataset.execHide);});});
+  var add=head.querySelector("[data-exec-add]");if(add)add.addEventListener("change",function(){addExecColumn(this.value);});
 };
-
-function installColumnUI(){
-  var count=$("jobCount");if(!count)return;
-  var head=count.closest(".card-head");if(!head||$("execColumnsBtn"))return;
-  var btn=document.createElement("button");btn.className="btn";btn.id="execColumnsBtn";btn.textContent="Columns";head.appendChild(btn);
-  var overlay=document.createElement("div");overlay.className="overlay";overlay.id="execColumnsModal";overlay.hidden=true;
-  overlay.innerHTML='<div class="modal w-md" role="dialog" aria-modal="true"><div class="modal-head"><div><h2>Recent execution columns</h2><div class="dim">Choose columns and the default sort order.</div></div><button class="icon-btn" id="execColumnsClose">&times;</button></div><div class="modal-body"><div class="form-section-title">Visible columns</div><div class="column-list" id="execColumnChoices"></div><div class="sort-grid"><label class="field"><span class="field-label">Sort by</span><select id="execSortSelect"></select></label><label class="field"><span class="field-label">Direction</span><select id="execSortDir"><option value="desc">Descending</option><option value="asc">Ascending</option></select></label></div></div><div class="modal-foot"><button class="btn" id="execColumnsDefault">Reset defaults</button><span class="spacer"></span><button class="btn btn-primary" id="execColumnsDone">Done</button></div></div>';
-  document.body.appendChild(overlay);
-  function renderPicker(){
-    $("execColumnChoices").innerHTML=execColumnOrder.map(function(k){return '<label class="column-choice"><input type="checkbox" data-col="'+k+'" '+(execPrefs.columns.indexOf(k)>=0?"checked":"")+'><span>'+esc(execColumns[k].label)+'</span></label>';}).join("");
-    $("execSortSelect").innerHTML=execColumnOrder.map(function(k){return '<option value="'+k+'" '+(execPrefs.sort===k?"selected":"")+'>'+esc(execColumns[k].label)+'</option>';}).join("");
-    $("execSortDir").value=execPrefs.dir;
-  }
-  function close(){overlay.hidden=true;saveExecPrefs();renderJobs();}
-  btn.addEventListener("click",function(){renderPicker();overlay.hidden=false;});
-  $("execColumnsClose").addEventListener("click",close);$("execColumnsDone").addEventListener("click",close);
-  overlay.addEventListener("mousedown",function(ev){if(ev.target===overlay)close();});
-  $("execColumnChoices").addEventListener("change",function(ev){var k=ev.target.dataset.col;if(!k)return;if(ev.target.checked){if(execPrefs.columns.indexOf(k)<0)execPrefs.columns.push(k);}else{execPrefs.columns=execPrefs.columns.filter(function(x){return x!==k;});}if(!execPrefs.columns.length){execPrefs.columns=["name"];renderPicker();}});
-  $("execSortSelect").addEventListener("change",function(){execPrefs.sort=this.value;});
-  $("execSortDir").addEventListener("change",function(){execPrefs.dir=this.value;});
-  $("execColumnsDefault").addEventListener("click",function(){execPrefs={columns:defaultColumns.slice(),sort:"date",dir:"desc"};renderPicker();});
-}
 
 var globalLogFollow=true;
 function logAtBottom(el){return el.scrollHeight-el.scrollTop-el.clientHeight<28;}
@@ -155,7 +164,7 @@ function installRetentionSetting(){
   $("saveRetention").addEventListener("click",async function(){var days=Number($("settingRetention").value);try{var s=await api("/api/settings",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({log_retention_days:days})});$("settingRetention").value=s.log_retention_days;toast("Log retention saved");}catch(e){toast(e.message,true);}});
 }
 
-loadExecPrefs();installColumnUI();installLogFollow();installRetentionSetting();renderJobs();refreshSettings();
+loadExecPrefs();installLogFollow();installRetentionSetting();renderJobs();refreshSettings();
 })();
 </script>
 `
