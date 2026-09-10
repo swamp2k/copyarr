@@ -26,7 +26,7 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(uiHTML))
+		_, _ = w.Write([]byte(enhanceUI(uiHTML)))
 	})
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		write(w, map[string]any{"ok": true, "service": "copyarr"})
@@ -150,8 +150,6 @@ func (s *Server) Handler() http.Handler {
 			http.Error(w, "invalid JSON", http.StatusBadRequest)
 			return
 		}
-		// A type means "check this draft before saving it"; a bare name means
-		// "check the remote that is already in the config".
 		if req.Type != "" {
 			result, err := s.eng.TestRemoteConfig(r.Context(), req.Type, req.Parameters, req.Path)
 			if err != nil {
@@ -208,8 +206,6 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("DELETE /api/remotes/{name}", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
-		// Deleting a remote that jobs still point at breaks them silently at
-		// the next scan, so it takes a deliberate second request to go through.
 		if usage := s.eng.RemoteUsage(name); len(usage) > 0 && r.URL.Query().Get("confirm") != "true" {
 			writeStatus(w, http.StatusConflict, map[string]any{
 				"error":   fmt.Sprintf("remote %q is used by %d job definition(s)", name, len(usage)),
@@ -268,11 +264,12 @@ func (s *Server) Handler() http.Handler {
 		write(w, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("GET /api/settings", func(w http.ResponseWriter, r *http.Request) {
-		write(w, s.eng.Settings())
+		write(w, s.eng.SettingsExtended())
 	})
 	mux.HandleFunc("PATCH /api/settings", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			LoggingEnabled *bool `json:"logging_enabled"`
+			LoggingEnabled   *bool `json:"logging_enabled"`
+			LogRetentionDays *int  `json:"log_retention_days"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -284,11 +281,17 @@ func (s *Server) Handler() http.Handler {
 				return
 			}
 		}
-		write(w, s.eng.Settings())
+		if req.LogRetentionDays != nil {
+			if err := s.eng.SetLogRetentionDays(*req.LogRetentionDays); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		write(w, s.eng.SettingsExtended())
 	})
 	mux.HandleFunc("GET /api/jobs", func(w http.ResponseWriter, r *http.Request) {
 		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-		items, err := s.eng.Jobs(limit)
+		items, err := s.eng.ExecutionRows(limit)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
