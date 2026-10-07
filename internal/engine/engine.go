@@ -16,6 +16,7 @@ import (
 
 	"github.com/swamp2k/copyarr/internal/config"
 	"github.com/swamp2k/copyarr/internal/db"
+	"github.com/swamp2k/copyarr/internal/privateering"
 	rc "github.com/swamp2k/copyarr/internal/rclone"
 	rt "github.com/swamp2k/copyarr/internal/rtorrent"
 )
@@ -176,6 +177,10 @@ func New(cfg config.Config, d *db.DB, version, revision string) *Engine {
 func (e *Engine) Run(ctx context.Context) {
 	go e.worker(ctx)
 	go e.scheduler(ctx)
+	if e.cfg.PrivateeringEnabled() {
+		pusher := privateering.New(e.cfg.NexusURL, e.cfg.NexusPrivateeringToken, e.cfg.PrivateeringPushInterval(), e)
+		go pusher.Run(ctx)
+	}
 }
 
 func (e *Engine) TriggerScan() {
@@ -842,6 +847,78 @@ func (e *Engine) Jobs(limit int) ([]JobView, error) {
 		out = append(out, JobView{Job: j, AttemptNumber: attempt, MaxAttempts: maxAttempts})
 	}
 	return out, nil
+}
+
+// PrivateeringSnapshot builds the torrents + copyarrFiles payload pushed to
+// Nexus. It is read-only and best-effort: an rtorrent endpoint that is
+// unreachable is skipped rather than failing the whole snapshot.
+func (e *Engine) PrivateeringSnapshot(ctx context.Context) (privateering.Snapshot, error) {
+	const maxTorrents = 50
+	const maxFiles = 200
+
+	seen := make(map[string]bool)
+	var torrents []privateering.Torrent
+	for _, r := range e.rulesSnapshot() {
+		if r.RTorrent == nil {
+			continue
+		}
+		list, err := rt.New(*r.RTorrent).Torrents(ctx)
+		if err != nil {
+			slog.Warn("privateering: rtorrent list failed", "rule", r.ID, "err", err)
+			continue
+		}
+		for _, t := range list {
+			if t.Hash == "" || seen[t.Hash] {
+				continue
+			}
+			seen[t.Hash] = true
+			progress := 0.0
+			if t.Complete {
+				progress = 100
+			} else if t.SizeBytes > 0 {
+				progress = float64(t.CompletedBytes) / float64(t.SizeBytes) * 100
+			}
+			var addedAt *string
+			if t.CreationDate > 0 {
+				v := time.Unix(t.CreationDate, 0).UTC().Format(time.RFC3339)
+				addedAt = &v
+			}
+			torrents = append(torrents, privateering.Torrent{
+				Hash:        t.Hash,
+				Name:        t.Name,
+				SizeBytes:   t.SizeBytes,
+				Completed:   t.Complete,
+				ProgressPct: progress,
+				AddedAt:     addedAt,
+			})
+		}
+	}
+	sort.SliceStable(torrents, func(i, j int) bool {
+		ai, aj := torrents[i].AddedAt, torrents[j].AddedAt
+		if ai == nil || aj == nil {
+			return false
+		}
+		return *ai > *aj
+	})
+	if len(torrents) > maxTorrents {
+		torrents = torrents[:maxTorrents]
+	}
+
+	objects, err := e.db.List(maxFiles)
+	if err != nil {
+		return privateering.Snapshot{}, err
+	}
+	files := make([]privateering.File, 0, len(objects))
+	for _, o := range objects {
+		files = append(files, privateering.File{
+			Path:        o.RelPath,
+			SizeBytes:   o.Size,
+			Status:      o.State,
+			CommittedAt: o.CompletedAt,
+		})
+	}
+
+	return privateering.Snapshot{Torrents: torrents, CopyarrFiles: files}, nil
 }
 
 func (e *Engine) Status() (Status, error) {

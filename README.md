@@ -44,6 +44,17 @@ Copyarr talks to an HTTP XML-RPC endpoint such as `/RPC2`. Do not expose raw rTo
 
 When enabled, Copyarr calls `d.multicall2` for hash, name, completion state and base path. Completed torrent base paths are mapped relative to `source_base_path` and used as a readiness gate. If `required` is false and the RPC endpoint is unavailable, the rule falls back to the stability timer.
 
+## Privateering (optional push to Nexus)
+
+Copyarr can push a periodic snapshot (torrents + managed files) to a [Nexus](https://github.com/) instance's Privateering ingest endpoint. It is disabled unless both settings are set:
+
+- `NEXUS_URL` (env var, e.g. `https://nexus.example`) or `nexus_url` in config.json
+- `NEXUS_PRIVATEERING_TOKEN` (env var) or `nexus_privateering_token` in config.json
+
+Prefer the environment variables for the token so it is never committed to config.json. `privateering_push_interval_seconds` controls how often the push happens (default 300 = 5 minutes).
+
+The push reuses Copyarr's existing rTorrent XML-RPC reads and its own objects table; it never blocks or crashes the main scan loop — failures are logged and retried on the next interval.
+
 ## API
 
 - `GET /health`

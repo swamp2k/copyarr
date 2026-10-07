@@ -3,6 +3,9 @@
   "listen_addr": ":8686",
   "rclone_config": "/config/rclone.conf",
   "scan_interval_seconds": 300,
+  "nexus_url": "",
+  "nexus_privateering_token": "",
+  "privateering_push_interval_seconds": 300,
   "rules": [
     {
       "id": "seedbox-to-unraid",
