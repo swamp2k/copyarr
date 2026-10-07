@@ -271,6 +271,47 @@ func (s *Server) Handler() http.Handler {
 		s.eng.TriggerScan()
 		write(w, map[string]any{"queued": true})
 	})
+	mux.HandleFunc("GET /api/privateering/settings", func(w http.ResponseWriter, r *http.Request) {
+		settings, err := s.eng.PrivateeringSettings()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		write(w, map[string]any{
+			"nexus_url":             settings.URL,
+			"token_set":             settings.Token != "",
+			"push_interval_seconds": settings.IntervalSeconds,
+			"enabled":               settings.Enabled(),
+		})
+	})
+	mux.HandleFunc("PUT /api/privateering/settings", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			NexusURL            string  `json:"nexus_url"`
+			Token               *string `json:"token"`
+			PushIntervalSeconds int     `json:"push_interval_seconds"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+		setToken := req.Token != nil
+		token := ""
+		if setToken {
+			token = *req.Token
+		}
+		if err := s.eng.UpdatePrivateeringSettings(req.NexusURL, setToken, token, req.PushIntervalSeconds); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		write(w, map[string]any{"ok": true})
+	})
+	mux.HandleFunc("POST /api/privateering/test", func(w http.ResponseWriter, r *http.Request) {
+		if err := s.eng.PushPrivateeringNow(r.Context()); err != nil {
+			writeStatus(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		write(w, map[string]any{"ok": true})
+	})
 	return mux
 }
 

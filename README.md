@@ -46,14 +46,13 @@ When enabled, Copyarr calls `d.multicall2` for hash, name, completion state and 
 
 ## Privateering (optional push to Nexus)
 
-Copyarr can push a periodic snapshot (torrents + managed files) to a [Nexus](https://github.com/) instance's Privateering ingest endpoint. It is disabled unless both settings are set:
+Copyarr can push a periodic snapshot (torrents + managed files) to a [Nexus](https://github.com/) instance's Privateering ingest endpoint. Configure it from Copyarr's own web UI, under the **Settings** tab:
 
-- `NEXUS_URL` (env var, e.g. `https://nexus.example`) or `nexus_url` in config.json
-- `NEXUS_PRIVATEERING_TOKEN` (env var) or `nexus_privateering_token` in config.json
+- **Nexus URL** - either Nexus's base URL (`https://nexus.example`) or the full ingest URL copied from Nexus's own settings page (`https://nexus.example/api/privateering/ingest`); both are accepted and normalized.
+- **Nexus token** - generated on Nexus's settings page. Stored in Copyarr's own SQLite database, never in config.json or an env var. Once saved, the UI only ever shows whether a token is set, never the token itself; leave the field blank when saving to keep it unchanged, or use "Clear token" to remove it.
+- **Push interval** - how often the snapshot is pushed (default 300 seconds).
 
-Prefer the environment variables for the token so it is never committed to config.json. `privateering_push_interval_seconds` controls how often the push happens (default 300 = 5 minutes).
-
-The push reuses Copyarr's existing rTorrent XML-RPC reads and its own objects table; it never blocks or crashes the main scan loop — failures are logged and retried on the next interval.
+The push is disabled whenever the URL or token is empty, and settings changes made in the UI take effect on the next check (within ~30s) without a restart. Use the **Send now** button to push immediately and verify the connection. The push reuses Copyarr's existing rTorrent XML-RPC reads and its own objects table; it never blocks or crashes the main scan loop — failures are logged and retried on the next interval.
 
 ## API
 

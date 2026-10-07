@@ -120,6 +120,9 @@ type Engine struct {
 	// A config.json rule with an override is being masked by a UI edit, which
 	// the UI surfaces so the masking is never silent.
 	overrides map[string]bool
+
+	privateeringStore  *privateering.Store
+	privateeringPusher *privateering.Pusher
 }
 
 type seenItem struct {
@@ -147,6 +150,8 @@ func New(cfg config.Config, d *db.DB, version, revision string) *Engine {
 		retryPolicies:  make(map[string]RetryPolicy),
 		overrides:      make(map[string]bool),
 	}
+	e.privateeringStore = privateering.NewStore(d)
+	e.privateeringPusher = privateering.New(e.privateeringStore, e)
 	if stored, err := d.MetaPrefix("jobdef:"); err == nil {
 		for key, raw := range stored {
 			var r config.Rule
@@ -177,10 +182,28 @@ func New(cfg config.Config, d *db.DB, version, revision string) *Engine {
 func (e *Engine) Run(ctx context.Context) {
 	go e.worker(ctx)
 	go e.scheduler(ctx)
-	if e.cfg.PrivateeringEnabled() {
-		pusher := privateering.New(e.cfg.NexusURL, e.cfg.NexusPrivateeringToken, e.cfg.PrivateeringPushInterval(), e)
-		go pusher.Run(ctx)
-	}
+	go e.privateeringPusher.Run(ctx)
+}
+
+// PrivateeringSettings returns the current Nexus push settings, including
+// the token in plaintext. Callers exposing this over the API must redact
+// the token themselves.
+func (e *Engine) PrivateeringSettings() (privateering.Settings, error) {
+	return e.privateeringStore.Get()
+}
+
+// UpdatePrivateeringSettings persists new settings. setToken controls
+// whether token replaces the stored token (an empty token with
+// setToken=true clears it); pass setToken=false to leave an already-saved
+// token untouched when the UI's token field was left blank.
+func (e *Engine) UpdatePrivateeringSettings(url string, setToken bool, token string, intervalSeconds int) error {
+	return e.privateeringStore.Update(url, setToken, token, intervalSeconds)
+}
+
+// PushPrivateeringNow sends a snapshot to Nexus immediately, used by the
+// "test connection" / "send now" UI action.
+func (e *Engine) PushPrivateeringNow(ctx context.Context) error {
+	return e.privateeringPusher.PushNow(ctx)
 }
 
 func (e *Engine) TriggerScan() {
