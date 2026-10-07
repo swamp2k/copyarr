@@ -16,6 +16,12 @@ import (
 type Torrent struct {
 	Hash, Name, BasePath string
 	Complete             bool
+	SizeBytes            int64
+	CompletedBytes       int64
+	// CreationDate is the torrent file's creation_date field (unix seconds),
+	// used as a best-effort proxy for "added" time; rtorrent has no reliable
+	// "added to client" timestamp over XML-RPC. 0 means unknown.
+	CreationDate int64
 }
 
 type Client struct {
@@ -64,6 +70,9 @@ func (c *Client) Torrents(ctx context.Context) ([]Torrent, error) {
 		`<param><value><string>d.name=</string></value></param>` +
 		`<param><value><string>d.complete=</string></value></param>` +
 		`<param><value><string>d.base_path=</string></value></param>` +
+		`<param><value><string>d.size_bytes=</string></value></param>` +
+		`<param><value><string>d.completed_bytes=</string></value></param>` +
+		`<param><value><string>d.creation_date=</string></value></param>` +
 		`</params></methodCall>`
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.URL, strings.NewReader(body))
 	if err != nil {
@@ -96,6 +105,15 @@ func (c *Client) Torrents(ctx context.Context) ([]Torrent, error) {
 		}
 		row := rowv.Array.Values
 		t := Torrent{Hash: str(row[0]), Name: str(row[1]), Complete: num(row[2]) != 0, BasePath: str(row[3])}
+		if len(row) > 4 {
+			t.SizeBytes = num(row[4])
+		}
+		if len(row) > 5 {
+			t.CompletedBytes = num(row[5])
+		}
+		if len(row) > 6 {
+			t.CreationDate = num(row[6])
+		}
 		out = append(out, t)
 	}
 	return out, nil

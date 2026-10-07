@@ -13,6 +13,28 @@ type Config struct {
 	RcloneConfig        string `json:"rclone_config"`
 	ScanIntervalSeconds int    `json:"scan_interval_seconds"`
 	Rules               []Rule `json:"rules"`
+
+	// Privateering: optional background push of a torrents/files snapshot to a
+	// Nexus instance. Enabled only when both values are set. Prefer the
+	// NEXUS_URL / NEXUS_PRIVATEERING_TOKEN environment variables for the
+	// token so secrets never need to live in config.json.
+	NexusURL                        string `json:"nexus_url,omitempty"`
+	NexusPrivateeringToken           string `json:"nexus_privateering_token,omitempty"`
+	PrivateeringPushIntervalSeconds int    `json:"privateering_push_interval_seconds,omitempty"`
+}
+
+// PrivateeringEnabled reports whether both the Nexus URL and token are set.
+func (c Config) PrivateeringEnabled() bool {
+	return c.NexusURL != "" && c.NexusPrivateeringToken != ""
+}
+
+// PrivateeringPushInterval returns the configured push interval, defaulting
+// to 5 minutes.
+func (c Config) PrivateeringPushInterval() time.Duration {
+	if c.PrivateeringPushIntervalSeconds <= 0 {
+		return 5 * time.Minute
+	}
+	return time.Duration(c.PrivateeringPushIntervalSeconds) * time.Second
 }
 
 type Endpoint struct {
@@ -67,6 +89,12 @@ func Load(path string) (Config, error) {
 	}
 	if c.ScanIntervalSeconds <= 0 {
 		c.ScanIntervalSeconds = 300
+	}
+	if v := os.Getenv("NEXUS_URL"); v != "" {
+		c.NexusURL = v
+	}
+	if v := os.Getenv("NEXUS_PRIVATEERING_TOKEN"); v != "" {
+		c.NexusPrivateeringToken = v
 	}
 	for i := range c.Rules {
 		if err := NormalizeRule(&c.Rules[i], i); err != nil {
