@@ -399,6 +399,33 @@ details.adv>div{padding:6px 0 16px}
       <span class="chip">Coming later</span>
     </div>
   </section>
+  <section class="card">
+    <div class="card-head">
+      <div><h2>Privateering (push to Nexus)</h2><div class="dim">Periodically pushes a snapshot of torrents and managed files to a Nexus instance.</div></div>
+    </div>
+    <div class="form-grid" style="margin-top:10px">
+      <label class="field wide">
+        <span class="field-label">Nexus URL</span>
+        <input id="pvUrl" placeholder="https://nexus.example" autocomplete="off" spellcheck="false">
+        <span class="field-help">Paste either the base URL or the full ingest URL from Nexus's settings page - both work.</span>
+      </label>
+      <label class="field">
+        <span class="field-label">Nexus token</span>
+        <input id="pvToken" type="password" placeholder="" autocomplete="off" spellcheck="false">
+        <span class="field-help" id="pvTokenStatus">loading...</span>
+      </label>
+      <label class="field">
+        <span class="field-label">Push interval (seconds)</span>
+        <input id="pvInterval" type="number" min="30" value="300">
+      </label>
+    </div>
+    <div class="form-actions" style="margin-top:14px">
+      <button class="btn" data-act="pv-clear-token">Clear token</button>
+      <button class="btn" data-act="pv-test">Send now</button>
+      <button class="btn btn-primary" data-act="pv-save">Save</button>
+    </div>
+    <div class="dim" id="pvResult" style="margin-top:10px"></div>
+  </section>
 </section>
 
 </div>
@@ -1770,7 +1797,58 @@ function showPage(name, tab){
   if(name === "jobs"){ refreshRemotes(false); refreshDefs(); }
   if(name === "remotes") refreshRemotes();
   if(name === "logs") refreshLogs();
-  if(name === "settings") refreshSettings();
+  if(name === "settings"){ refreshSettings(); refreshPrivateering(); }
+}
+
+/* Privateering settings ----------------------------------------------------- */
+async function refreshPrivateering(){
+  try{
+    var s = await api("/api/privateering/settings");
+    $("pvUrl").value = s.nexus_url || "";
+    $("pvInterval").value = s.push_interval_seconds || 300;
+    $("pvToken").value = "";
+    $("pvToken").placeholder = s.token_set ? "(unchanged - token is set)" : "(not set)";
+    $("pvTokenStatus").textContent = s.token_set ? "Token is set. Leave blank to keep it." : "No token set yet.";
+  }catch(e){
+    toast(e.message, true);
+  }
+}
+async function savePrivateering(){
+  try{
+    var body = {
+      nexus_url: $("pvUrl").value.trim(),
+      push_interval_seconds: parseInt($("pvInterval").value, 10) || 300
+    };
+    var tok = $("pvToken").value;
+    if(tok !== "") body.token = tok;
+    await api("/api/privateering/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    toast("Settings saved");
+    refreshPrivateering();
+  }catch(e){
+    toast(e.message, true);
+  }
+}
+async function clearPrivateeringToken(){
+  try{
+    await api("/api/privateering/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+      nexus_url: $("pvUrl").value.trim(),
+      push_interval_seconds: parseInt($("pvInterval").value, 10) || 300,
+      token: ""
+    }) });
+    toast("Token cleared");
+    refreshPrivateering();
+  }catch(e){
+    toast(e.message, true);
+  }
+}
+async function testPrivateering(){
+  $("pvResult").textContent = "Sending...";
+  try{
+    await api("/api/privateering/test", { method: "POST" });
+    $("pvResult").textContent = "Snapshot sent successfully.";
+  }catch(e){
+    $("pvResult").textContent = "Failed: " + e.message;
+  }
 }
 
 function setFilter(f, el){
@@ -1819,6 +1897,9 @@ document.addEventListener("click", function(ev){
   else if(act === "remote-del") deleteRemote(t.dataset.name);
   else if(act === "remote-test") testSavedRemote(t.dataset.name);
   else if(act === "remote-close") closeRemoteWizard();
+  else if(act === "pv-save") savePrivateering();
+  else if(act === "pv-clear-token") clearPrivateeringToken();
+  else if(act === "pv-test") testPrivateering();
   else if(act === "wiz-pick"){
     wiz.type = t.dataset.type;
     wiz.provider = providerByName(wiz.type);
