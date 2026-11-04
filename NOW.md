@@ -14,7 +14,7 @@ State:
 - Verified PR #1 changes only AGENTS.md, CLAUDE.md, and NOW.md; no implementation changes. PR #1 CI passed (verified 2026-11-04). Root instruction files still absent on main until PR #1 merges.
 - 2026-11-04: re-confirmed lastPush is a plain time.Time field read/written in maybePush and PushNow with no mutex (pusher.go:60,99,102,118). Data race still unreproduced at runtime.
 
-Next step: After user direction, reproduce concurrent scheduled/manual Nexus pushes with a focused race-detector test; if confirmed, synchronize scheduling state and add regression coverage. Also cover settings token preservation/clearing and URL normalization. Run repository CI checks and go test -race for affected packages.
+Next step: DONE
 
 Blocked by: Further implementation awaits user direction as requested. PR #1 needs merging to land instructions on main. Local clone now works (local checkout, Go installed); local Go/Docker checks not yet run.
 
