@@ -16,6 +16,6 @@ State:
 
 Next step: After user direction, reproduce concurrent scheduled/manual Nexus pushes with a focused race-detector test; if confirmed, synchronize scheduling state and add regression coverage. Also cover settings token preservation/clearing and URL normalization. Run repository CI checks and go test -race for affected packages.
 
-Blocked by: Further implementation awaits user direction as requested. PR #1 needs merging to land instructions on main. Local clone now works (D:ibe\copyarr, Go installed); local Go/Docker checks not yet run.
+Blocked by: Further implementation awaits user direction as requested. PR #1 needs merging to land instructions on main. Local clone now works (local checkout, Go installed); local Go/Docker checks not yet run.
 
 Updated: 2026-11-04
