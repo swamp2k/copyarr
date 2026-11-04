@@ -1,6 +1,6 @@
 # NOW
 
-Doing: Repository orientation completed; root instructions and bookmark published on branch docs/session-bookmark-2026-11-02 in PR #1 (https://github.com/swamp2k/copyarr/pull/1). Awaiting user direction before implementation.
+Doing: Re-orientation (2026-11-04) completed; nothing changed on main since 2026-11-02. Previously: root instructions and bookmark published on branch docs/session-bookmark-2026-11-02 in PR #1 (https://github.com/swamp2k/copyarr/pull/1). Awaiting user direction before implementation.
 
 State:
 - Reviewed main at d78eb4dafae9c04d4ad39ac8c9b51cc3d99e9d96, README, CI, entry point, engine, API, Privateering pusher/settings, existing snapshot test, recent commits, and open PRs.
@@ -11,10 +11,11 @@ State:
 - CI runs go mod tidy, go test ./..., go vet ./..., and Docker build on pushes/PRs. Publishing to GHCR happens only after successful CI on main or version tags.
 - Static finding: Pusher.lastPush is accessed without synchronization by the background schedule and HTTP-triggered PushNow. Race-detector reproduction is pending; runtime impact is unverified. No direct pusher/settings tests exist in internal/privateering; engine snapshot coverage exists.
 - README still describes Nexus registration, accounts/auth, and checksums as later work. Deployment health and current test results are unverified.
-- Verified PR #1 changes only AGENTS.md, CLAUDE.md, and NOW.md; no implementation changes. PR CI was in progress at the last check; its final outcome is unverified.
+- Verified PR #1 changes only AGENTS.md, CLAUDE.md, and NOW.md; no implementation changes. PR #1 CI passed (verified 2026-11-04). Root instruction files still absent on main until PR #1 merges.
+- 2026-11-04: re-confirmed lastPush is a plain time.Time field read/written in maybePush and PushNow with no mutex (pusher.go:60,99,102,118). Data race still unreproduced at runtime.
 
 Next step: After user direction, reproduce concurrent scheduled/manual Nexus pushes with a focused race-detector test; if confirmed, synchronize scheduling state and add regression coverage. Also cover settings token preservation/clearing and URL normalization. Run repository CI checks and go test -race for affected packages.
 
-Blocked by: Further implementation awaits user direction as requested. Local clone failed because the workspace HTTP proxy was unreachable; inspection/publication use the GitHub connector. Local Go/Docker checks have not run; PR CI result is pending.
+Blocked by: Further implementation awaits user direction as requested. PR #1 needs merging to land instructions on main. Local clone now works (D:ibe\copyarr, Go installed); local Go/Docker checks not yet run.
 
-Updated: 2026-11-02
+Updated: 2026-11-04
